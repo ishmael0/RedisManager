@@ -1,11 +1,11 @@
-# Santel.Redis.TypedKeys
+﻿# Santel.Redis.TypedKeys
 
-Strongly-typed Redis key & hash abstractions (string key + hash field semantics) with optional in?memory caching, structured metadata, and lightweight pub/sub notifications. Built on StackExchange.Redis targeting .NET 9.
+Strongly-typed Redis key & hash abstractions (string key + hash field semantics) with optional in‑memory caching, structured metadata, and lightweight pub/sub notifications. Built on StackExchange.Redis targeting .NET 9.
 
 ## Why
 Typical Redis usage scatters string constants, serialization logic, caching flags, and pub/sub plumbing across the codebase. This library:
 - Centralizes key definitions in a single derived context.
-- Auto?wires all declared `RedisKey<T>` / `RedisHashKey<T>` properties via reflection.
+- Auto‑wires all declared `RedisKey<T>` / `RedisHashKey<T>` properties via reflection.
 - Adds optional per-key / per-field in-memory caching.
 - Adds lightweight publish notifications (single field or bulk) for cache invalidation in other processes.
 - Wraps stored payloads with timestamp + Persian date metadata (`RedisDataWrapper<T>`).
@@ -18,7 +18,7 @@ dotnet add package Santel.Redis.TypedKeys
 Or add to a project file:
 ```xml
 <ItemGroup>
-  <PackageReference Include="Santel.Redis.TypedKeys" Version="1.0.0" />
+  <PackageReference Include="Santel.Redis.TypedKeys" Version="1.0.1" />
 </ItemGroup>
 ```
 
@@ -104,7 +104,7 @@ var carol = await ctx.Users.ReadAsync("2");
 ```
 
 ## Pub/Sub Model
-Channel name = provided `prefix` (if empty you effectively broadcast on an empty channel � usually supply something like env or tenant id).
+Channel name = provided `prefix` (if empty you effectively broadcast on an empty channel – usually supply something like env or tenant id).
 Messages:
 - `RedisKey<T>`: `KeyName`
 - `RedisHashKey<T>` single field update: `HashName|{field}`
@@ -160,7 +160,7 @@ Uses cursor-like offset logic with `HashScanAsync`.
 long sizeKey = ctx.AppVersion.GetSize();
 long sizeUsers = ctx.Users.GetSize();
 ```
-Uses `MEMORY USAGE` � may return 0 if unsupported by server or lacking permission.
+Uses `MEMORY USAGE` – may return 0 if unsupported by server or lacking permission.
 
 ## Hash Length Safety Limit
 `RedisHashKey<T>` enforces a soft limit (4000 fields). Bulk or single writes failing the limit log an informational message and return false. Adjust in source (`IsLimitExceeded`).

@@ -38,15 +38,16 @@ namespace Modules.RedisModule
         /// <summary>
         /// Constructs the context and initializes all declared <see cref="RedisHashKey{T}"/> and <see cref="RedisKey{T}"/> properties via reflection.
         /// </summary>
-        /// <param name="logger">Logger instance.</param>
         /// <param name="connectionMultiplexerWrite">Write connection.</param>
         /// <param name="connectionMultiplexerRead">Read connection.</param>
         /// <param name="keepDataInMemory">Enable in-memory caching of values.</param>
+        /// <param name="logger">Logger instance.</param>
         /// <param name="usePushNotification">Whether to enable publish notifications (currently always used).</param>
         /// <param name="prefix">Environment/namespace prefix for key names.</param>
 
-        public RedisDBContextModule(ILogger logger, IConnectionMultiplexer connectionMultiplexerWrite,
+        public RedisDBContextModule(IConnectionMultiplexer connectionMultiplexerWrite,
             IConnectionMultiplexer connectionMultiplexerRead, bool keepDataInMemory,
+            ILogger logger,
             bool usePushNotification = true, string? prefix = null)
         {
             Logger = logger;

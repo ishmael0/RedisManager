@@ -41,19 +41,19 @@ namespace Modules.RedisModule
         /// <param name="logger">Logger instance.</param>
         /// <param name="connectionMultiplexerWrite">Write connection.</param>
         /// <param name="connectionMultiplexerRead">Read connection.</param>
-        /// <param name="enviromentName">Environment/namespace prefix for key names.</param>
+        /// <param name="prefix">Environment/namespace prefix for key names.</param>
         /// <param name="keepDataInMemory">Enable in-memory caching of values.</param>
         /// <param name="usePushNotification">Whether to enable publish notifications (currently always used).</param>
         public RedisDBContextModule(ILogger logger, IConnectionMultiplexer connectionMultiplexerWrite,
-            IConnectionMultiplexer connectionMultiplexerRead, string enviromentName, bool keepDataInMemory,
-            bool usePushNotification)
+            IConnectionMultiplexer connectionMultiplexerRead, bool keepDataInMemory,
+            bool usePushNotification = true, string? prefix = null)
         {
             Logger = logger;
             ConnectionMultiplexerRead = connectionMultiplexerRead;
             ConnectionMultiplexerWrite = connectionMultiplexerWrite;
             KeepDataInMemory = keepDataInMemory;
             Sub = ConnectionMultiplexerRead.GetSubscriber();
-            Channel = new RedisChannel(enviromentName, RedisChannel.PatternMode.Literal);
+            Channel = new RedisChannel(prefix, RedisChannel.PatternMode.Literal);
             GetType().GetProperties().Where(c =>
                     c.PropertyType.IsGenericType && c.PropertyType.GetGenericTypeDefinition() == typeof(RedisHashKey<>))
                 .Select(c => new { GType = c, Type = c.PropertyType.GetGenericArguments()[0], c.Name })
@@ -68,11 +68,11 @@ namespace Modules.RedisModule
                                 IRedisCommonHashKeyMethods;
                         c.GType.SetValue(this, item);
                     }
-                    var ch = new RedisChannel(enviromentName, RedisChannel.PatternMode.Literal);
+                    var ch = new RedisChannel(prefix, RedisChannel.PatternMode.Literal);
                     item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
                         () => Sub?.Publish(ch, $"{c.Name}|all"),
                         (key) => Sub?.Publish(ch, $"{c.Name}|{key}"),
-                        new RedisKey($"{enviromentName}_{c.Name}"), keepDataInMemory);
+                        new RedisKey($"{prefix}_{c.Name}"), keepDataInMemory);
                 });
 
 
@@ -90,9 +90,9 @@ namespace Modules.RedisModule
                                 IRedisCommonKeyMethods;
                         c.GType.SetValue(this, item);
                     }
-                    var ch = new RedisChannel(enviromentName, RedisChannel.PatternMode.Literal);
+                    var ch = new RedisChannel(prefix, RedisChannel.PatternMode.Literal);
                     item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead, () => Sub?.Publish(ch, c.Name),
-                        new RedisKey($"{enviromentName}_{c.Name}"), keepDataInMemory);
+                        new RedisKey($"{prefix}_{c.Name}"), keepDataInMemory);
                 });
         }
 

@@ -41,9 +41,10 @@ namespace Modules.RedisModule
         /// <param name="logger">Logger instance.</param>
         /// <param name="connectionMultiplexerWrite">Write connection.</param>
         /// <param name="connectionMultiplexerRead">Read connection.</param>
-        /// <param name="prefix">Environment/namespace prefix for key names.</param>
         /// <param name="keepDataInMemory">Enable in-memory caching of values.</param>
         /// <param name="usePushNotification">Whether to enable publish notifications (currently always used).</param>
+        /// <param name="prefix">Environment/namespace prefix for key names.</param>
+
         public RedisDBContextModule(ILogger logger, IConnectionMultiplexer connectionMultiplexerWrite,
             IConnectionMultiplexer connectionMultiplexerRead, bool keepDataInMemory,
             bool usePushNotification = true, string? prefix = null)
@@ -69,10 +70,11 @@ namespace Modules.RedisModule
                         c.GType.SetValue(this, item);
                     }
                     var ch = new RedisChannel(prefix, RedisChannel.PatternMode.Literal);
+                    var fullKeyName = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}_{c.Name}"; // updated logic
                     item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
                         () => Sub?.Publish(ch, $"{c.Name}|all"),
                         (key) => Sub?.Publish(ch, $"{c.Name}|{key}"),
-                        new RedisKey($"{prefix}_{c.Name}"), keepDataInMemory);
+                        new RedisKey(fullKeyName), keepDataInMemory);
                 });
 
 
@@ -91,8 +93,9 @@ namespace Modules.RedisModule
                         c.GType.SetValue(this, item);
                     }
                     var ch = new RedisChannel(prefix, RedisChannel.PatternMode.Literal);
+                    var fullKeyName = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}_{c.Name}"; // updated logic
                     item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead, () => Sub?.Publish(ch, c.Name),
-                        new RedisKey($"{prefix}_{c.Name}"), keepDataInMemory);
+                        new RedisKey(fullKeyName), keepDataInMemory);
                 });
         }
 

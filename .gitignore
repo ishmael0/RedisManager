@@ -1,0 +1,89 @@
+# .NET / Visual Studio
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build artifacts
+bin/
+obj/
+**/bin/
+**/obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]uild/
+[Ll]ogs/
+TestResults/
+*.log
+
+# Publish / distribution
+publish/
+dist/
+artifacts/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/packages/
+packages/
+# (Keep packages.config if any)
+!packages/*/README.*
+
+# Coverage / profilings
+*.coverage
+*.coveragexml
+coverage/
+CoverageOutput/
+*.vsp
+*.vspx
+*.psess
+
+# IDE specific
+.vscode/
+.vs/
+.idea/
+*.DotSettings.user
+_ReSharper*/
+
+# Rider / JetBrains
+.idea/**
+
+# Cache / temp
+*.swp
+*.tmp
+~$*
+*.cache
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+!env.example
+secrets.json
+
+# Azure / publish profiles
+*.pubxml
+*.pubxml.user
+
+# Local tooling
+.tools/
+
+# Generated files
+Generated/**
+
+# Optional lock files (uncomment if you decide to ignore)
+# packages.lock.json
+
+# Visual Studio Code workspace settings (keep if you want to share)
+*.code-workspace
+
+# T4 generated files
+*.csproj.user
+
+# Others
+node_modules/

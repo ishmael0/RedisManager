@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
-namespace Modules.RedisModule
+namespace Santel.Redis.TypedKeys
 {
     /// <summary>
     /// Base class that holds common properties and delegates used by Redis key abstractions.

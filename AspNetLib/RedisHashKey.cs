@@ -3,7 +3,7 @@ using Newtonsoft.Json;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
 
-namespace Modules.RedisModule
+namespace Santel.Redis.TypedKeys
 {
     /// <summary>
     /// Represents a Redis Hash key wrapper that supports optional in-memory caching of deserialized values

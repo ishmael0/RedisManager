@@ -1,6 +1,6 @@
 ﻿using System.Globalization;
 
-namespace Modules.RedisModule
+namespace Santel.Redis.TypedKeys
 {
     /// <summary>
     /// Wraps a data value with metadata such as capture timestamp and a pre-formatted Persian date string.

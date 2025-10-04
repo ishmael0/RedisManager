@@ -3,7 +3,7 @@ using Newtonsoft.Json;
 using StackExchange.Redis;
 
 
-namespace Modules.RedisModule
+namespace Santel.Redis.TypedKeys
 {
     /// <summary>
     /// Represents a simple Redis string key abstraction (not hash) that can cache a single serialized value

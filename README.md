@@ -1,25 +1,25 @@
-# Santel.RedisModule
+# Santel.Redis.TypedKeys
 
-High-level .NET (net9.0) helper around StackExchange.Redis that:
+Typed Redis key + hash abstractions with optional in-memory caching and lightweight pub/sub notifications built on StackExchange.Redis (targets .NET 9.0).
 
+Features:
 - Auto-initializes strongly-typed `RedisKey<T>` (string keys) and `RedisHashKey<T>` (hash keys) defined as properties on your context class.
-- Adds optional in-memory caching per key / hash field.
-- Publishes change notifications (Pub/Sub) for individual fields or whole-hash updates.
-- Wraps values with metadata (UTC timestamp + Persian date string) using `RedisDataWrapper<T>`.
-- Provides batched bulk read/write helpers & size (MEMORY USAGE) inspection.
+- Optional in-memory caching (per key / per hash field) with explicit invalidation helpers.
+- Pub/Sub change notifications for single-field writes or whole-hash (bulk) updates.
+- Metadata wrapper (`RedisDataWrapper<T>`) adds UTC timestamp + Persian date string.
+- Batched bulk read/write helpers & approximate size (`MEMORY USAGE`) inspection.
 
 ## Install
-(When published to NuGet)
+Published as a NuGet package:
 ```
- dotnet add package Santel.RedisModule
+ dotnet add package Santel.Redis.TypedKeys
 ```
-Or via PackageReference:
+Or via `PackageReference`:
 ```xml
-<PackageReference Include="Santel.RedisModule" Version="0.1.0" />
+<PackageReference Include="Santel.Redis.TypedKeys" Version="1.0.0" />
 ```
 
 ## Core Types
-
 | Type | Purpose |
 |------|---------|
 | `RedisDBContextModule` | Reflection bootstrapper: finds `RedisKey<>` / `RedisHashKey<>` properties and wires them up. |
@@ -41,8 +41,8 @@ public class MyRedisContext : RedisDBContextModule
                           IConnectionMultiplexer writer,
                           IConnectionMultiplexer reader,
                           string env,
-                          bool cache = true)
-        : base(logger, writer, reader, env, cache, usePushNotification: true) { }
+                          bool keepDataInMemory = true)
+        : base(logger, writer, reader, env, keepDataInMemory, usePushNotification: true) { }
 }
 
 // Usage (e.g. in a scoped service)
@@ -92,7 +92,7 @@ Use `ForceToReFetch()` / `ForceToReFetchAll()` to invalidate.
 
 ## Size & Limits
 - `RedisHashKey<T>` refuses writes if current + incoming fields exceed 4000 (guard). Adjust in source if needed.
-- `GetSize()` uses Redis `MEMORY USAGE` (approximate, may require proper permissions / Redis version >= 4). 
+- `GetSize()` uses Redis `MEMORY USAGE` (approximate, may require proper permissions / Redis version >= 4).
 
 ## Custom Serialization
 Provide lambdas when constructing a key/hash:
@@ -124,7 +124,4 @@ All operations log errors with the provided `ILogger` to aid diagnostics.
 - Strongly typed pub/sub eventing helpers.
 
 ## License
-MIT (add LICENSE file if not present).
-
----
-Generated README based on project source.
+MIT

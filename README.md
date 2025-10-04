@@ -1,4 +1,4 @@
-# RedisManager
+# Santel.RedisModule
 
 High-level .NET (net9.0) helper around StackExchange.Redis that:
 
@@ -9,11 +9,14 @@ High-level .NET (net9.0) helper around StackExchange.Redis that:
 - Provides batched bulk read/write helpers & size (MEMORY USAGE) inspection.
 
 ## Install
-(If published as a NuGet package)
+(When published to NuGet)
 ```
- dotnet add package RedisManager
+ dotnet add package Santel.RedisModule
 ```
-*(Adjust to actual package id when published.)*
+Or via PackageReference:
+```xml
+<PackageReference Include="Santel.RedisModule" Version="0.1.0" />
+```
 
 ## Core Types
 

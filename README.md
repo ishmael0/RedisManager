@@ -32,6 +32,7 @@ Or add to a project file:
 | `IRedisCommonKeyMethods` / `IRedisCommonHashKeyMethods` | Internal capability contracts. |
 
 ## Constructor & Key Naming
+
 `RedisDBContextModule` constructor (current signature):
 ```csharp
 public RedisDBContextModule(
@@ -39,13 +40,13 @@ public RedisDBContextModule(
     IConnectionMultiplexer connectionMultiplexerRead,
     bool keepDataInMemory,
     ILogger logger,
-    bool usePushNotification = true,
-    string? prefix = null)
+    string? prefix = null,
+    string? channelName = null)
 ```
 Key naming rule:
 - If `prefix` is null or empty: key name = `PropertyName`.
 - Else: key name = `${prefix}_{PropertyName}`.
-Publish channel: the raw `prefix` literal (can be empty; supply a non-empty isolation token in multi-env scenarios).
+Publish channel: if `channelName` is provided and not empty, it is used for pub/sub; if null or empty, no publish operations are performed.
 
 ## Defining a Context
 ```csharp
@@ -66,8 +67,9 @@ public class AppRedisContext : RedisDBContextModule
                            IConnectionMultiplexer reader,
                            ILogger<AppRedisContext> logger,
                            string? prefix,
-                           bool keepDataInMemory = true)
-        : base(writer, reader, keepDataInMemory, logger, usePushNotification: true, prefix: prefix) { }
+                           bool keepDataInMemory = true,
+                           string? channelName = null)
+        : base(writer, reader, keepDataInMemory, logger, prefix, channelName) { }
 }
 
 public record UserProfile(int Id, string Name)

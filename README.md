@@ -1,74 +1,52 @@
 ﻿# Santel.Redis.TypedKeys
 
-Strongly-typed Redis key & hash abstractions (string key + hash field semantics) with optional in‑memory caching, structured metadata, and lightweight pub/sub notifications. Built on StackExchange.Redis targeting .NET 9.
+Typed, discoverable Redis keys for .NET 9. Focus on developer ergonomics: concise key definitions, optional in‑memory caching, and lightweight pub/sub notifications – all on top of StackExchange.Redis.
 
-## Why
-Typical Redis usage scatters string constants, serialization logic, caching flags, and pub/sub plumbing across the codebase. This library:
-- Centralizes key definitions in a single derived context.
-- Auto‑wires all declared `RedisKey<T>` / `RedisHashKey<T>` properties via reflection.
-- Adds optional per-key / per-field in-memory caching.
-- Adds lightweight publish notifications (single field or bulk) for cache invalidation in other processes.
-- Wraps stored payloads with timestamp + Persian date metadata (`RedisDataWrapper<T>`).
-- Provides bulk operations, pagination helpers, concurrency helpers, size inspection, and basic safety limits.
+- .NET: 9
+- Redis client: StackExchange.Redis 2.x
+- Package: Santel.Redis.TypedKeys
 
-## Package Installation
+## Highlights
+- Strongly-typed wrappers for simple keys and hash maps: `RedisKey<T>`, `RedisHashKey<T>`
+- One central context (`RedisDBContextModule`) where you declare all keys
+- Optional per-key/per-field in-memory cache with easy invalidation
+- Built-in lightweight pub/sub notifications for cross-process cache invalidation
+- Opt-in custom serialization per key
+- Helpers: hash paging, DB size, bulk write with chunking, soft safety limits
+
+## Install
 ```
 dotnet add package Santel.Redis.TypedKeys
 ```
-Or add to a project file:
-```xml
-<ItemGroup>
-  <PackageReference Include="Santel.Redis.TypedKeys" Version="1.0.1" />
-</ItemGroup>
-```
 
-## Core Types Overview
-| Type | Summary |
-|------|---------|
-| `RedisDBContextModule` | Base class you inherit; discovers and initializes key/hash properties. |
-| `RedisKey<T>` | Single Redis string key abstraction (value + metadata + optional cache). |
-| `RedisHashKey<T>` | Redis hash abstraction with per-field cache & bulk helpers. |
-| `RedisDataWrapper<T>` | Metadata wrapper (UTC `DateTime`, Persian formatted string, `Data`). |
-| `IRedisCommonKeyMethods` / `IRedisCommonHashKeyMethods` | Internal capability contracts. |
+## Requirements
+- .NET 9
+- A running Redis server
 
-## Constructors & Key Naming
-Two constructor overloads are available:
+---
+
+## Quick Start
+
+1) Define your context (a class inheriting `RedisDBContextModule`) and declare your keys:
 ```csharp
-public RedisDBContextModule(
-    IConnectionMultiplexer connectionMultiplexerWrite,
-    IConnectionMultiplexer connectionMultiplexerRead,
-    bool keepDataInMemory,
-    ILogger logger,
-    string? prefix = null,
-    string? channelName = null)
+using Newtonsoft.Json;
+using Santel.Redis.TypedKeys;
+using StackExchange.Redis;
 
-public RedisDBContextModule(
-    IConnectionMultiplexer connectionMultiplexer,
-    bool keepDataInMemory,
-    ILogger logger,
-    string? prefix = null,
-    string? channelName = null)
-```
-Notes:
-- The single-multiplexer overload uses the same connection for both read and write.
-- Key naming: if `prefix` is null/empty → key name = `PropertyName`; otherwise → `${prefix}_{PropertyName}`.
-- Pub/Sub: if `channelName` is provided and not empty, publish operations are enabled on that channel; otherwise publishing is disabled.
-
-## Defining a Context
-```csharp
 public class AppRedisContext : RedisDBContextModule
 {
-    // Database 0 simple key
+    // DB 0: simple string key
     public RedisKey<string> AppVersion { get; set; } = new(0);
 
-    // Database 1: hash of user profiles
+    // DB 1: user profiles stored in a hash (field = userId)
     public RedisHashKey<UserProfile> Users { get; set; } = new(1);
 
-    // Database 2: custom serialization example
+    // DB 2: invoices with custom serialization
     public RedisHashKey<Invoice> Invoices { get; set; } = new(2,
         serialize: inv => JsonConvert.SerializeObject(inv, Formatting.None),
         deSerialize: s => JsonConvert.DeserializeObject<Invoice>(s)!);
 
+    // Use separate read/write multiplexers (recommended for replicas), or the single-mux overload below.
     public AppRedisContext(IConnectionMultiplexer writer,
                            IConnectionMultiplexer reader,
                            ILogger<AppRedisContext> logger,
@@ -77,7 +55,7 @@ public class AppRedisContext : RedisDBContextModule
                            string? channelName = null)
         : base(writer, reader, keepDataInMemory, logger, prefix, channelName) { }
 
-    // Or use the single-multiplexer overload
+    // Single-multiplexer overload (read = write)
     public AppRedisContext(IConnectionMultiplexer mux,
                            ILogger<AppRedisContext> logger,
                            string? prefix,
@@ -93,163 +71,202 @@ public record UserProfile(int Id, string Name)
 public record Invoice(string Id, decimal Amount);
 ```
 
-## Basic Usage
+2) Register with DI
 ```csharp
-var ctx = new AppRedisContext(writerMux, readerMux, logger, prefix: "Prod", keepDataInMemory: true);
-
-// String key
-ctx.AppVersion.Write("1.4.9");
-var ver = ctx.AppVersion.Read();
-
-// Hash single entry
-ctx.Users.Write("42", new UserProfile(42, "Alice"));
-var alice = ctx.Users.Read("42");
-
-// Bulk hash write
-await ctx.Users.WriteAsync(new Dictionary<string, UserProfile>
-{
-    ["1"] = new(1, "Bob"),
-    ["2"] = new(2, "Carol")
-}, forceToPublish: true); // triggers channel publish 'Users|all'
-
-// Bulk read (cached after first fetch if keepDataInMemory=true)
-var some = ctx.Users.Read(new [] { "1", "2" });
-
-// Async field read
-var carol = await ctx.Users.ReadAsync("2");
-```
-
-## Pub/Sub Model
-Channel name = the provided `channelName` constructor parameter. If null/empty, publishing is disabled.
-Messages:
-- `RedisKey<T>`: `KeyName`
-- `RedisHashKey<T>` single field update: `HashName|{field}`
-- `RedisHashKey<T>` bulk/forced publish: `HashName|all`
-
-Subscriber example:
-```csharp
-var sub = readerMux.GetSubscriber();
-await sub.SubscribeAsync("Prod", (channel, msg) =>
-{
-    // Patterns: Users|123  Users|all  AppVersion
-    var text = (string)msg;
-    if (text.EndsWith("|all"))
-    {
-        // invalidate all cached fields for that hash locally
-    }
-    else if (text.Contains('|'))
-    {
-        var parts = text.Split('|'); // parts[0]=hash, parts[1]=field
-    }
-    else
-    {
-        // simple key changed
-    }
-});
-```
-
-## Caching & Invalidation
-Enable by passing `keepDataInMemory: true` to the base constructor.
-- `RedisKey<T>`: last value wrapper cached.
-- `RedisHashKey<T>`: individual field wrappers cached lazily.
-Invalidation helpers:
-```csharp
-ctx.AppVersion.ForceToReFetch();          // drop single key cache
-ctx.Users.ForceToReFetch("42");          // drop one field
-ctx.Users.ForceToReFetchAll();            // drop all cached fields
-ctx.Users.DoPublishAll();                 // manual global publish (Users|all)
-```
-A pub/sub handler in other processes should call `ForceToReFetch` / `ForceToReFetchAll` accordingly.
-
-## Paging Hash Fields
-```csharp
-var (fieldNames, total) = await ctx.GetHashKeysByPage(
-    database: 1,
-    hashKey: ctx.Users.FullName, // underlying redis key
-    pageNumber: 2,
-    pageSize: 25);
-```
-Uses cursor-like offset logic with `HashScanAsync`.
-
-## Memory Usage / Size
-```csharp
-long sizeKey = ctx.AppVersion.GetSize();
-long sizeUsers = ctx.Users.GetSize();
-```
-Uses `MEMORY USAGE` – may return 0 if unsupported by server or lacking permission.
-
-## Hash Length Safety Limit
-`RedisHashKey<T>` enforces a soft limit (4000 fields). Bulk or single writes failing the limit log an informational message and return false. Adjust in source (`IsLimitExceeded`).
-
-## Bulk Write Chunking
-`WriteAsync(IDictionary<string,T>, maxChunkSizeInBytes)` splits large payloads by serialized byte length to avoid over-large single operations.
-
-## Custom Serialization
-You may override serialization per key / hash (shown earlier for `Invoices`). Metadata wrapping is preserved.
-
-## Metadata Wrapper
-All stored data is nested inside `RedisDataWrapper<T>`:
-```json
-{
-  "Data": { /* your T */ },
-  "DateTime": "2025-01-01T10:12:33.456Z",
-  "PersianLastUpdate": "1403/10/11 13:42"
-}
-```
-Access with `ReadFull` / `ReadFull(string key)` when you need timestamps.
-
-## Dependency Injection
-A generic extension method is provided to register your derived context with DI:
-```csharp
+using Microsoft.Extensions.DependencyInjection;
 using Santel.Redis.TypedKeys;
+using StackExchange.Redis;
 
-services.AddSingleton<IConnectionMultiplexer>(sp => ConnectionMultiplexer.Connect(config));
+var services = new ServiceCollection();
+services.AddSingleton<IConnectionMultiplexer>(sp =>
+    ConnectionMultiplexer.Connect("localhost:6379"));
 services.AddLogging();
 
+// Registers your derived context via generic extension.
+// It will try the single-multiplexer ctor first, then the dual-mux ctor.
 services.AddRedisDBContext<AppRedisContext>(
     keepDataInMemory: true,
     prefix: "Prod",
     channelName: "Prod");
 ```
-How it works:
-- Resolves `IConnectionMultiplexer` and `ILogger<AppRedisContext>` from DI.
-- Tries the single-multiplexer constructor `(IConnectionMultiplexer, bool, ILogger, string?, string?)` first.
-- Falls back to the dual-multiplexer constructor `(IConnectionMultiplexer, IConnectionMultiplexer, bool, ILogger, string?, string?)` if present.
 
-You can also register the base `RedisDBContextModule` (rarely useful on its own):
+3) Use it
 ```csharp
-services.AddRedisDBContext<RedisDBContextModule>(
-    keepDataInMemory: true,
-    prefix: "Prod",
-    channelName: "Prod");
+var sp = services.BuildServiceProvider();
+var ctx = sp.GetRequiredService<AppRedisContext>();
+
+// Simple key
+ctx.AppVersion.Write("1.5.0");
+string? version = ctx.AppVersion.Read();
+
+// Hash: single field
+ctx.Users.Write("42", new UserProfile(42, "Alice"));
+var alice = ctx.Users.Read("42");
+
+// Hash: bulk write + publish-all for cross-process invalidation
+await ctx.Users.WriteAsync(new Dictionary<string, UserProfile>
+{
+    ["1"] = new(1, "Bob"),
+    ["2"] = new(2, "Carol")
+}, forceToPublish: true); // publishes "Users|all" if channelName was set
+
+// Hash: multi-read
+var batch = ctx.Users.Read(new[] { "1", "2" });
 ```
 
-Manual registration remains an option if you need custom wiring:
+---
+
+## Key Naming & Pub/Sub
+- Naming: if `prefix` is null/empty → `PropertyName`; else → `${prefix}_{PropertyName}`
+- Publish channel: controlled by `channelName`
+  - `RedisKey<T>` publish payload: `KeyName`
+  - `RedisHashKey<T>` publish field: `HashName|{field}`
+  - `RedisHashKey<T>` publish-all: `HashName|all`
+
+Subscribe example:
 ```csharp
-services.AddSingleton<IConnectionMultiplexer>(sp => ConnectionMultiplexer.Connect(config));
-services.AddSingleton<AppRedisContext>(sp =>
+var sub = readerMux.GetSubscriber();
+await sub.SubscribeAsync("Prod", (ch, msg) =>
 {
-    var mux = sp.GetRequiredService<IConnectionMultiplexer>();
-    var logger = sp.GetRequiredService<ILogger<AppRedisContext>>();
-    return new AppRedisContext(mux, mux, logger,
-        prefix: Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
-        keepDataInMemory: true,
-        channelName: "Prod");
+    var text = (string)msg;
+    if (text.EndsWith("|all"))
+    {
+        // Invalidate entire hash cache for that key
+    }
+    else if (text.Contains('|'))
+    {
+        var parts = text.Split('|'); // parts[0] = hash, parts[1] = field
+        // Invalidate a single field cache
+    }
+    else
+    {
+        // Simple key invalidation
+    }
 });
 ```
 
-## Error Handling & Logging
-All operations catch and log exceptions with contextual key info using the provided `ILogger`.
+Note: Publishing is performed via the write multiplexer; subscribing can use the read multiplexer.
 
-## Versioning / Roadmap Ideas
-Planned / potential improvements:
-- Configurable hash size limit.
-- Optional compression (e.g., LZ4) layer.
-- Structured pub/sub event model.
-- Metrics hooks (latency / miss ratio).
+---
+
+## Caching & Invalidation
+Enable or disable by `keepDataInMemory` in the constructor or DI extension.
+- `RedisKey<T>`: caches the last `RedisDataWrapper<T>` read or written
+- `RedisHashKey<T>`: caches individual field wrappers on-demand
+
+Invalidation helpers:
+```csharp
+ctx.AppVersion.ForceToReFetch();        // drop the simple key cache
+ctx.Users.ForceToReFetch("42");        // drop one field cache
+ctx.Users.ForceToReFetchAll();          // drop all cached fields for that hash
+ctx.Users.DoPublishAll();               // publish "Users|all" to the channel
+```
+
+---
+
+## API Cheatsheet (most used)
+
+RedisKey<T>
+- Construction in context: `public RedisKey<T> SomeKey { get; set; } = new(dbIndex);`
+- Write: `Write(T value)` / `Task WriteAsync(T value)`
+- Read: `T? Read()` / `Task<T?> ReadAsync()`
+- Read full wrapper (timestamps): `RedisDataWrapper<T>? ReadFull()`
+- Exists: `bool Exists()`
+- Remove: `bool Remove()` / `Task<bool> RemoveAsync()`
+- Cache control: `ForceToReFetch()`
+
+RedisHashKey<T>
+- Construction: `public RedisHashKey<T> SomeHash { get; set; } = new(dbIndex, serialize?, deSerialize?);`
+- Write single: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
+- Write bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false, int maxChunkSizeInBytes = 1024*128)`
+- Read single: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
+- Read multi: `IDictionary<string,T?> Read(IEnumerable<string> fields)`
+- Remove: `Task<bool> RemoveAsync(string field)` / multi-field overload
+- Remove whole hash: `Task<bool> RemoveAsync()`
+- Cache control: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
+- Publish all: `DoPublishAll()`
+
+Context helpers
+- `Task<long> GetDbSize(int database)`
+- `Task<(List<string>? Keys, long Total)> GetHashKeysByPage(int database, string hashKey, int pageNumber = 1, int pageSize = 10)`
+- `Task<string?> GetValues(int database, string key)` (reads raw string value for a simple key)
+
+---
+
+## Paging Example (Hash fields)
+```csharp
+var (fields, total) = await ctx.GetHashKeysByPage(
+    database: 1,
+    hashKey: ctx.Users.FullName, // underlying redis key
+    pageNumber: 2,
+    pageSize: 25);
+```
+
+---
+
+## Bulk Write Chunking
+When writing large dictionaries to a hash, you can pass a `maxChunkSizeInBytes` to split payloads:
+```csharp
+await ctx.Invoices.WriteAsync(
+    items: bigDictionary,
+    forceToPublish: false,
+    maxChunkSizeInBytes: 256 * 1024);
+```
+This reduces the chance of timeouts due to oversized operations.
+
+---
+
+## Custom Serialization
+You can override serialization per key to integrate any serializer. The library always wraps your data inside `RedisDataWrapper<T>` for timestamps/metadata.
+```csharp
+public RedisHashKey<Invoice> Invoices { get; set; } = new(2,
+    serialize: inv => JsonSerializer.Serialize(inv),
+    deSerialize: s => JsonSerializer.Deserialize<Invoice>(s)!);
+```
+
+---
+
+## Dependency Injection
+A generic DI extension is provided:
+```csharp
+services.AddRedisDBContext<AppRedisContext>(
+    keepDataInMemory: true,
+    prefix: "Prod",          // becomes key prefix: Prod_{Property}
+    channelName: "Prod");    // pub/sub channel name (omit/empty to disable publishing)
+```
+The factory tries these constructors in order:
+1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, string? prefix, string? channelName)`
+2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, string? prefix, string? channelName)`
+
+You can still register manually if you need custom wiring.
+
+---
+
+## Best Practices
+- Use a separate read multiplexer pointing at a replica if you have heavy read traffic.
+- Keep `channelName` consistent per environment/tenant to avoid cross-talk.
+- Use `ForceToReFetch(All)` after receiving pub/sub messages to keep caches coherent.
+- Prefer async methods for high-throughput paths.
+- Consider setting a reasonable `maxChunkSizeInBytes` for very large bulk writes.
+
+---
+
+## Troubleshooting
+- No pub/sub events? Ensure `channelName` was provided and the publisher uses the write connection.
+- Seeing stale data? Verify `keepDataInMemory` settings and that your subscribers invalidate caches.
+- Timeouts on bulk writes? Lower `maxChunkSizeInBytes`.
+- DB size returns 0? Some Redis providers disable commands (e.g., `DBSIZE`).
+
+---
+
+## Versioning
+- Target framework: .NET 9
+- Redis client: StackExchange.Redis 2.7.x
+
+---
 
 ## License
 MIT
 
-## Disclaimer
-Use responsibly in high cardinality scenarios: the in-memory cache is per-process and unbounded except for the hash field count guard.
+## Contributing
+Issues and PRs are welcome.

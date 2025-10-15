@@ -31,9 +31,8 @@ Or add to a project file:
 | `RedisDataWrapper<T>` | Metadata wrapper (UTC `DateTime`, Persian formatted string, `Data`). |
 | `IRedisCommonKeyMethods` / `IRedisCommonHashKeyMethods` | Internal capability contracts. |
 
-## Constructor & Key Naming
-
-`RedisDBContextModule` constructor (current signature):
+## Constructors & Key Naming
+Two constructor overloads are available:
 ```csharp
 public RedisDBContextModule(
     IConnectionMultiplexer connectionMultiplexerWrite,
@@ -42,11 +41,18 @@ public RedisDBContextModule(
     ILogger logger,
     string? prefix = null,
     string? channelName = null)
+
+public RedisDBContextModule(
+    IConnectionMultiplexer connectionMultiplexer,
+    bool keepDataInMemory,
+    ILogger logger,
+    string? prefix = null,
+    string? channelName = null)
 ```
-Key naming rule:
-- If `prefix` is null or empty: key name = `PropertyName`.
-- Else: key name = `${prefix}_{PropertyName}`.
-Publish channel: if `channelName` is provided and not empty, it is used for pub/sub; if null or empty, no publish operations are performed.
+Notes:
+- The single-multiplexer overload uses the same connection for both read and write.
+- Key naming: if `prefix` is null/empty → key name = `PropertyName`; otherwise → `${prefix}_{PropertyName}`.
+- Pub/Sub: if `channelName` is provided and not empty, publish operations are enabled on that channel; otherwise publishing is disabled.
 
 ## Defining a Context
 ```csharp
@@ -70,6 +76,14 @@ public class AppRedisContext : RedisDBContextModule
                            bool keepDataInMemory = true,
                            string? channelName = null)
         : base(writer, reader, keepDataInMemory, logger, prefix, channelName) { }
+
+    // Or use the single-multiplexer overload
+    public AppRedisContext(IConnectionMultiplexer mux,
+                           ILogger<AppRedisContext> logger,
+                           string? prefix,
+                           bool keepDataInMemory = true,
+                           string? channelName = null)
+        : base(mux, keepDataInMemory, logger, prefix, channelName) { }
 }
 
 public record UserProfile(int Id, string Name)
@@ -106,7 +120,7 @@ var carol = await ctx.Users.ReadAsync("2");
 ```
 
 ## Pub/Sub Model
-Channel name = provided `prefix` (if empty you effectively broadcast on an empty channel – usually supply something like env or tenant id).
+Channel name = the provided `channelName` constructor parameter. If null/empty, publishing is disabled.
 Messages:
 - `RedisKey<T>`: `KeyName`
 - `RedisHashKey<T>` single field update: `HashName|{field}`
@@ -184,30 +198,29 @@ All stored data is nested inside `RedisDataWrapper<T>`:
 ```
 Access with `ReadFull` / `ReadFull(string key)` when you need timestamps.
 
-## Removing Data
+## Dependency Injection
+You can register the base `RedisDBContextModule` using the provided extension method:
 ```csharp
-await ctx.Users.RemoveAsync("42");               // remove field
-await ctx.Users.RemoveAsync(new RedisValue[]{"1","2"}); // multi-field
-await ctx.Users.RemoveAsync();                    // delete whole hash key
-```
+services.AddSingleton<IConnectionMultiplexer>(sp => ConnectionMultiplexer.Connect(config));
+services.AddLogging();
 
-## Concurrency Test Utility
-```csharp
-await RedisHashKey<int>.TestConcurrency_IN_ForceToReFetchAll(ctx.SomeIntHash);
+services.AddRedisDBContext(
+    keepDataInMemory: true,
+    prefix: "Prod",
+    channelName: "Prod");
 ```
-Stress test for simultaneous cache invalidation + reads.
+This registers a singleton `RedisDBContextModule` using the single-multiplexer constructor overload.
 
-## DI Registration Sketch
+Alternatively, if you define your own derived context:
 ```csharp
 services.AddSingleton<IConnectionMultiplexer>(sp => ConnectionMultiplexer.Connect(config));
 services.AddSingleton<AppRedisContext>(sp =>
 {
     var mux = sp.GetRequiredService<IConnectionMultiplexer>();
     var logger = sp.GetRequiredService<ILogger<AppRedisContext>>();
-    return new AppRedisContext(mux, mux, logger, prefix: Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"));
+    return new AppRedisContext(mux, mux, logger, prefix: Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), keepDataInMemory: true, channelName: "Prod");
 });
 ```
-(You may supply separate read/write multiplexers if desired.)
 
 ## Error Handling & Logging
 All operations catch and log exceptions with contextual key info using the provided `ILogger`.

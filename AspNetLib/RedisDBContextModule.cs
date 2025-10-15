@@ -1,8 +1,25 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
 namespace Santel.Redis.TypedKeys
 {
+
+    public static class RedisDBContextModuleHandler
+    {
+        public static void AddRedisDBContext(this IServiceCollection services, bool keepDataInMemory, string? prefix = null,
+            string? channelName = null)
+        {
+            services.AddSingleton<RedisDBContextModule>(
+                c => new RedisDBContextModule(
+                    c.GetRequiredService<IConnectionMultiplexer>(),
+                    keepDataInMemory: true,
+                    c.GetRequiredService<ILogger<RedisDBContextModule>>(),
+                    prefix: null,
+                    channelName: null
+                ));
+        }
+    }
 
     /// <summary>
     /// Provides a reflection-based bootstrap context that initializes Redis key/hash key properties
@@ -21,19 +38,19 @@ namespace Santel.Redis.TypedKeys
         /// <summary>
         /// Indicates if keys should keep data cached locally.
         /// </summary>
-        public bool KeepDataInMemory { get; }
+        public bool KeepDataInMemory { get; set; }
         /// <summary>
         /// Logger for diagnostics.
         /// </summary>
-        public ILogger Logger { get; }
+        private ILogger Logger { get; set; }
         /// <summary>
         /// Redis subscriber used for publish notifications.
         /// </summary>
-        public ISubscriber Sub { get; }
+        public ISubscriber Sub { get; set; }
         /// <summary>
         /// Root channel used for publish events (only meaningful when a non-empty channel name is provided).
         /// </summary>
-        public RedisChannel Channel { get; }
+        public RedisChannel Channel { get; set; }
 
         /// <summary>
         /// Constructs the context and initializes all declared <see cref="RedisHashKey{T}"/> and <see cref="RedisKey{T}"/> properties via reflection.
@@ -51,11 +68,31 @@ namespace Santel.Redis.TypedKeys
             string? prefix = null,
             string? channelName = null)
         {
+            Init(connectionMultiplexerWrite, connectionMultiplexerRead, keepDataInMemory, logger, prefix, channelName);
+        }
+        public RedisDBContextModule(IConnectionMultiplexer connectionMultiplexer,
+            bool keepDataInMemory,
+            ILogger logger,
+            string? prefix = null,
+            string? channelName = null)
+        {
+            Init(connectionMultiplexer, connectionMultiplexer, keepDataInMemory, logger, prefix, channelName);
+        }
+
+        private void Init(
+            IConnectionMultiplexer connectionMultiplexerWrite,
+            IConnectionMultiplexer connectionMultiplexerRead,
+            bool keepDataInMemory,
+            ILogger logger,
+            string? prefix = null,
+            string? channelName = null
+            )
+        {
             Logger = logger;
             ConnectionMultiplexerRead = connectionMultiplexerRead;
             ConnectionMultiplexerWrite = connectionMultiplexerWrite;
             KeepDataInMemory = keepDataInMemory;
-            Sub = ConnectionMultiplexerRead.GetSubscriber();
+            Sub = ConnectionMultiplexerWrite.GetSubscriber();
             var hasChannel = !string.IsNullOrWhiteSpace(channelName);
             Channel = hasChannel ? new RedisChannel(channelName, RedisChannel.PatternMode.Literal) : default;
 
@@ -78,10 +115,10 @@ namespace Santel.Redis.TypedKeys
                     // Publish delegates (no-ops if channel not provided)
                     Action publishAll = hasChannel
                         ? () => { Sub?.Publish(Channel, $"{c.Name}|all"); }
-                        : () => { };
+                    : () => { };
                     Action<string> publishField = hasChannel
                         ? key => { Sub?.Publish(Channel, $"{c.Name}|{key}"); }
-                        : _ => { };
+                    : _ => { };
 
                     item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
                         publishAll,
@@ -106,12 +143,13 @@ namespace Santel.Redis.TypedKeys
 
                     Action publish = hasChannel
                         ? () => { Sub?.Publish(Channel, c.Name); }
-                        : () => { };
+                    : () => { };
 
                     item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead, publish,
                         new RedisKey(fullKeyName), keepDataInMemory);
                 });
         }
+
 
         /// <summary>
         /// Returns the number of keys present in a given Redis logical database.

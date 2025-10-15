@@ -1,25 +1,8 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
 namespace Santel.Redis.TypedKeys
 {
-
-    public static class RedisDBContextModuleHandler
-    {
-        public static void AddRedisDBContext(this IServiceCollection services, bool keepDataInMemory, string? prefix = null,
-            string? channelName = null)
-        {
-            services.AddSingleton<RedisDBContextModule>(
-                c => new RedisDBContextModule(
-                    c.GetRequiredService<IConnectionMultiplexer>(),
-                    keepDataInMemory: true,
-                    c.GetRequiredService<ILogger<RedisDBContextModule>>(),
-                    prefix: null,
-                    channelName: null
-                ));
-        }
-    }
 
     /// <summary>
     /// Provides a reflection-based bootstrap context that initializes Redis key/hash key properties

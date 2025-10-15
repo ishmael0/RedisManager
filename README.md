@@ -199,26 +199,42 @@ All stored data is nested inside `RedisDataWrapper<T>`:
 Access with `ReadFull` / `ReadFull(string key)` when you need timestamps.
 
 ## Dependency Injection
-You can register the base `RedisDBContextModule` using the provided extension method:
+A generic extension method is provided to register your derived context with DI:
 ```csharp
+using Santel.Redis.TypedKeys;
+
 services.AddSingleton<IConnectionMultiplexer>(sp => ConnectionMultiplexer.Connect(config));
 services.AddLogging();
 
-services.AddRedisDBContext(
+services.AddRedisDBContext<AppRedisContext>(
     keepDataInMemory: true,
     prefix: "Prod",
     channelName: "Prod");
 ```
-This registers a singleton `RedisDBContextModule` using the single-multiplexer constructor overload.
+How it works:
+- Resolves `IConnectionMultiplexer` and `ILogger<AppRedisContext>` from DI.
+- Tries the single-multiplexer constructor `(IConnectionMultiplexer, bool, ILogger, string?, string?)` first.
+- Falls back to the dual-multiplexer constructor `(IConnectionMultiplexer, IConnectionMultiplexer, bool, ILogger, string?, string?)` if present.
 
-Alternatively, if you define your own derived context:
+You can also register the base `RedisDBContextModule` (rarely useful on its own):
+```csharp
+services.AddRedisDBContext<RedisDBContextModule>(
+    keepDataInMemory: true,
+    prefix: "Prod",
+    channelName: "Prod");
+```
+
+Manual registration remains an option if you need custom wiring:
 ```csharp
 services.AddSingleton<IConnectionMultiplexer>(sp => ConnectionMultiplexer.Connect(config));
 services.AddSingleton<AppRedisContext>(sp =>
 {
     var mux = sp.GetRequiredService<IConnectionMultiplexer>();
     var logger = sp.GetRequiredService<ILogger<AppRedisContext>>();
-    return new AppRedisContext(mux, mux, logger, prefix: Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), keepDataInMemory: true, channelName: "Prod");
+    return new AppRedisContext(mux, mux, logger,
+        prefix: Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+        keepDataInMemory: true,
+        channelName: "Prod");
 });
 ```
 

@@ -80,8 +80,7 @@ namespace Santel.Redis.TypedKeys
             Channel = hasChannel ? new RedisChannel(channelName, RedisChannel.PatternMode.Literal) : default;
 
             // Single pass over properties to initialize keys
-            var type = GetType();
-            foreach (var prop in type.GetProperties())
+            foreach (var prop in GetType().GetProperties())
             {
                 var pType = prop.PropertyType;
                 if (!pType.IsGenericType)
@@ -95,6 +94,25 @@ namespace Santel.Redis.TypedKeys
                 {
                     var item = prop.GetValue(this) as IRedisCommonHashKeyMethods
                                ?? Activator.CreateInstance(typeof(RedisHashKey<>).MakeGenericType(tArg), 1, null, null) as IRedisCommonHashKeyMethods;
+                    if (item == null) continue;
+                    prop.SetValue(this, item);
+
+                    Action publishAll = hasChannel
+                        ? () => { Sub?.Publish(Channel, $"{prop.Name}|all"); }
+                        : () => { };
+                    Action<string> publishField = hasChannel
+                        ? key => { Sub?.Publish(Channel, $"{prop.Name}|{key}"); }
+                        : _ => { };
+
+                    item.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
+                        publishAll,
+                        publishField,
+                        new RedisKey(fullKeyName), keepDataInMemory);
+                }
+                if (genDef == typeof(RedisPrefixedKeys<>))
+                {
+                    var item = prop.GetValue(this) as IRedisCommonHashKeyMethods
+                               ?? Activator.CreateInstance(typeof(RedisPrefixedKeys<>).MakeGenericType(tArg), 1, null, null) as IRedisCommonHashKeyMethods;
                     if (item == null) continue;
                     prop.SetValue(this, item);
 

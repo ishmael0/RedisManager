@@ -49,7 +49,7 @@ namespace Santel.Redis.TypedKeys
             ContextConfig = contexConfig;
             FullName = fullName;
             Reader = ContextConfig.Reader.GetDatabase(DbIndex);
-            Writer = ContextConfig.Reader.GetDatabase(DbIndex);
+            Writer = ContextConfig.Writer.GetDatabase(DbIndex);
         }
         /// <summary>
         /// Returns approximate memory usage (bytes) in Redis for this key using the MEMORY USAGE command.

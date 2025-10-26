@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
-using Santel.Redis.TypedKeys;
+﻿using Santel.Redis.TypedKeys;
 using StackExchange.Redis;
 
 // Simple console demo for Santel.Redis.TypedKeys

@@ -13,24 +13,28 @@ namespace Santel.Redis.TypedKeys
         /// Creates a new wrapper around the provided data, capturing the current time and Persian date.
         /// </summary>
         /// <param name="data">Payload value to wrap.</param>
+        /// <exception cref="ArgumentNullException">Thrown when data is null.</exception>
         public RedisDataWrapper(T data)
         {
-            Data = data;
-            DateTime = DateTime.Now;
+            Data = data ?? throw new ArgumentNullException(nameof(data));
+            DateTime = DateTime.UtcNow;
             var pc = new PersianCalendar();
-            PersianLastUpdate = $"{pc.GetYear(DateTime)}/{pc.GetMonth(DateTime)}/{pc.GetDayOfMonth(DateTime)} - {pc.GetHour(DateTime)}:{pc.GetMinute(DateTime)}"; ;
+            PersianLastUpdate = $"{pc.GetYear(DateTime):0000}/{pc.GetMonth(DateTime):00}/{pc.GetDayOfMonth(DateTime):00} - {pc.GetHour(DateTime):00}:{pc.GetMinute(DateTime):00}";
         }
+
         /// <summary>
         /// Actual stored value.
         /// </summary>
-        public T Data { set; get; }
+        public T Data { get; set; }
+
         /// <summary>
-        /// Timestamp captured at construction time.
+        /// UTC timestamp captured at construction time.
         /// </summary>
-        public DateTime DateTime { set; get; }
+        public DateTime DateTime { get; set; }
+
         /// <summary>
-        /// Persian formatted timestamp (yyyy/M/d - H:m).
+        /// Persian formatted timestamp (yyyy/MM/dd - HH:mm).
         /// </summary>
-        public string PersianLastUpdate { set; get; }
+        public string PersianLastUpdate { get; set; }
     }
 }

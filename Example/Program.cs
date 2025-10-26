@@ -3,42 +3,47 @@ using Microsoft.Extensions.Logging;
 using Santel.Redis.TypedKeys;
 using StackExchange.Redis;
 
-// Minimal console demo showing how to wire and use Santel.Redis.TypedKeys
-
-// DI
-var services = new ServiceCollection();
-services.AddLogging(b => b.AddSimpleConsole(o =>
+// Simple console demo for Santel.Redis.TypedKeys
+using var loggerFactory = LoggerFactory.Create(builder =>
 {
-    o.SingleLine = true;
-    o.TimestampFormat = "HH:mm:ss ";
-}).SetMinimumLevel(LogLevel.Information));
+    builder
+        .AddConsole()
+        .SetMinimumLevel(LogLevel.Information);
+});
 
-services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect("localhost:6379"));
+// Create a typed logger (ILogger<Program>)
+var logger = loggerFactory.CreateLogger<AppRedisContext>();
+var ctx = new AppRedisContext(ConnectionMultiplexer.Connect("localhost:6379"), true, logger);
 
-// Register your Redis context
-services.AddRedisDBContext<AppRedisContext>(
-    keepDataInMemory: true,
-    nameGeneratorStrategy: name => $"Demo_{name}",
-    channelName: "Demo");
+// DI setup
+//{
+//    var services = new ServiceCollection();
+//    services.AddLogging();
+//    services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect("localhost:6379"));
+//    services.AddRedisDBContext<AppRedisContext>(
+//        keepDataInMemory: true,
+//        nameGeneratorStrategy: name => $"Demo_{name}",
+//        channelName: "Demo");
 
-var sp = services.BuildServiceProvider();
-var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Demo");
-var ctx = sp.GetRequiredService<AppRedisContext>();
+//    var sp = services.BuildServiceProvider();
+//    var ctx = sp.GetRequiredService<AppRedisContext>();
+
+//}
 
 // Simple key
 ctx.AppVersion.Write("1.0.0");
 var version = ctx.AppVersion.Read();
-logger.LogInformation("AppVersion = {Version}", version);
+Console.WriteLine($"AppVersion = {version}");
 
 // Hash key
 await ctx.Users.WriteAsync("42", new UserProfile(42, "Alice"));
 var alice = await ctx.Users.ReadAsync("42");
-logger.LogInformation("User 42 = {User}", alice?.Name);
+Console.WriteLine($"Users[42] = {alice?.Name}");
 
 // Prefixed keys (stored as "UserById:{id}")
 await ctx.UserById.WriteAsync("100", new UserProfile(100, "Bob"));
 var bob = await ctx.UserById.ReadAsync("100");
-logger.LogInformation("UserById 100 = {User}", bob?.Name);
+Console.WriteLine($"UserById[100] = {bob?.Name}");
 
 Console.WriteLine("Done.");
 
@@ -57,6 +62,7 @@ public class AppRedisContext : RedisDBContextModule
         : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
     {
     }
+
 }
 
 public record UserProfile(int Id, string Name)

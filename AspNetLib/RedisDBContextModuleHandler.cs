@@ -13,15 +13,12 @@ namespace Santel.Redis.TypedKeys
             services.AddSingleton<T>(sp =>
             {
                 var mux = sp.GetRequiredService<IConnectionMultiplexer>();
-
-                // Try single-multiplexer constructor first: (IConnectionMultiplexer, bool, ILogger, string?, string?)
                 try
                 {
                     return ActivatorUtilities.CreateInstance<T>(sp, mux, keepDataInMemory, nameGeneratorStrategy, channelName);
                 }
                 catch
                 {
-                    // Fallback to dual-multiplexer constructor: (IConnectionMultiplexer, IConnectionMultiplexer, bool, ILogger, string?, string?)
                     return ActivatorUtilities.CreateInstance<T>(sp, mux, mux, keepDataInMemory, nameGeneratorStrategy, channelName);
                 }
             });

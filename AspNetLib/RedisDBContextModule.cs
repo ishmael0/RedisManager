@@ -3,83 +3,69 @@ using StackExchange.Redis;
 
 namespace Santel.Redis.TypedKeys
 {
+    public class RedisDBContextModuleConfigs
+    {
+        public ISubscriber? Sub { get; set; }
+        public RedisChannel? Channel { get; set; }
+        public ILogger? Logger { get; set; }
+        public bool KeepDataInMemory { get; set; }
+        public IConnectionMultiplexer Writer { get; set; }
+        public IConnectionMultiplexer Reader { get; set; }
 
-    /// <summary>
-    /// Provides a reflection-based bootstrap context that initializes Redis key/hash key properties
-    /// on derived types, wiring optional publish/subscribe callbacks and optional in-memory caching behavior.
-    /// </summary>
+        public void PublishByKey(IRedisHashKey a, string key)
+        {
+            if (Channel.HasValue)
+                Sub?.Publish(Channel.Value, $"{a.FullName}|{key}");
+        }
+        public void Publish(IRedisHashKey a)
+        {
+            if (Channel.HasValue)
+                Sub?.Publish(Channel.Value, $"{a.FullName}|all");
+        }
+        public void Publish(IRedisKey a)
+        {
+            if (Channel.HasValue)
+                Sub?.Publish(Channel.Value, $"{a.FullName}");
+        }
+    }
     public class RedisDBContextModule
     {
-        /// <summary>
-        /// Writer connection multiplexer.
-        /// </summary>
-        public IConnectionMultiplexer ConnectionMultiplexerWrite { set; get; }
-        /// <summary>
-        /// Reader connection multiplexer.
-        /// </summary>
-        public IConnectionMultiplexer ConnectionMultiplexerRead { set; get; }
-        /// <summary>
-        /// Indicates if keys should keep data cached locally.
-        /// </summary>
-        public bool KeepDataInMemory { get; set; }
-        /// <summary>
-        /// Logger for diagnostics.
-        /// </summary>
-        private ILogger Logger { get; set; }
-        /// <summary>
-        /// Redis subscriber used for publish notifications.
-        /// </summary>
-        public ISubscriber Sub { get; set; }
-        /// <summary>
-        /// Root channel used for publish events (only meaningful when a non-empty channel name is provided).
-        /// </summary>
-        public RedisChannel Channel { get; set; }
-
-        /// <summary>
-        /// Constructs the context and initializes all declared <see cref="RedisHashKey{T}"/> and <see cref="RedisKey{T}"/> properties via reflection.
-        /// </summary>
-        /// <param name="connectionMultiplexerWrite">Write connection.</param>
-        /// <param name="connectionMultiplexerRead">Read connection.</param>
-        /// <param name="keepDataInMemory">Enable in-memory caching of values.</param>
-        /// <param name="logger">Logger instance.</param>
-        /// <param name="nameGeneratorStrategy"></param>
-        /// <param name="channelName">Pub/Sub channel name. If null/empty no publish operations are performed.</param>
+        private RedisDBContextModuleConfigs Config { set; get; } = new();
         public RedisDBContextModule() { }
-        public RedisDBContextModule(IConnectionMultiplexer connectionMultiplexerWrite,
-            IConnectionMultiplexer connectionMultiplexerRead,
-            bool keepDataInMemory,
-            ILogger logger,
-            Func<string, string>? nameGeneratorStrategy = null,
-            string? channelName = null)
+        public RedisDBContextModule(RedisDBContextExtendedOptions options, ILogger<RedisDBContextModule>? logger = null)
         {
-            Init(connectionMultiplexerWrite, connectionMultiplexerRead, keepDataInMemory, logger, nameGeneratorStrategy, channelName);
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            if (options.ConnectionMultiplexerWrite == null && options.ConnectionMultiplexerRead == null)
+                throw new ArgumentException("At least one connection multiplexer must be provided in options.", nameof(options));
+
+            var write = options.ConnectionMultiplexerWrite ?? options.ConnectionMultiplexerRead!;
+            var read = options.ConnectionMultiplexerRead ?? options.ConnectionMultiplexerWrite!;
+
+            Init(write, read, options.KeepDataInMemory, logger, options.NameGeneratorStrategy, options.ChannelName);
         }
-        public RedisDBContextModule(IConnectionMultiplexer connectionMultiplexer,
-            bool keepDataInMemory,
-            ILogger logger,
-            Func<string, string>? nameGeneratorStrategy = null,
-            string? channelName = null)
+        public RedisDBContextModule(RedisDBContextOptions options, ILogger<RedisDBContextModule>? logger = null)
         {
-            Init(connectionMultiplexer, connectionMultiplexer, keepDataInMemory, logger, nameGeneratorStrategy, channelName);
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            if (options.ConnectionMultiplexer == null)
+                throw new ArgumentException("At least one connection multiplexer must be provided in options.", nameof(options));
+            Init(options.ConnectionMultiplexer, options.ConnectionMultiplexer, options.KeepDataInMemory, logger, options.NameGeneratorStrategy, options.ChannelName);
         }
 
-        private void Init(
-            IConnectionMultiplexer connectionMultiplexerWrite,
-            IConnectionMultiplexer connectionMultiplexerRead,
-            bool keepDataInMemory,
-            ILogger logger,
-            Func<string, string>? nameGeneratorStrategy = null,
-            string? channelName = null
-            )
+        void Init(
+          IConnectionMultiplexer connectionMultiplexerWrite,
+          IConnectionMultiplexer connectionMultiplexerRead,
+          bool keepDataInMemory,
+          ILogger? logger,
+          Func<string, string>? nameGeneratorStrategy = null,
+          string? channelName = null
+          )
         {
-            Logger = logger;
-            ConnectionMultiplexerRead = connectionMultiplexerRead;
-            ConnectionMultiplexerWrite = connectionMultiplexerWrite;
-            KeepDataInMemory = keepDataInMemory;
-            Sub = ConnectionMultiplexerWrite.GetSubscriber();
-            var hasChannel = !string.IsNullOrWhiteSpace(channelName);
-            Channel = hasChannel ? new RedisChannel(channelName, RedisChannel.PatternMode.Literal) : default;
-
+            Config.KeepDataInMemory = keepDataInMemory;
+            Config.Writer = connectionMultiplexerWrite;
+            Config.Reader = connectionMultiplexerRead;
+            Config.Logger = logger;
+            Config.Sub = connectionMultiplexerWrite.GetSubscriber();
+            Config.Channel = !string.IsNullOrWhiteSpace(channelName) ? new RedisChannel(channelName, RedisChannel.PatternMode.Literal) : default;
             // Single pass over properties to initialize keys
             foreach (var prop in GetType().GetProperties())
             {
@@ -93,99 +79,26 @@ namespace Santel.Redis.TypedKeys
 
                 if (genDef == typeof(RedisHashKey<>))
                 {
-                    var item = prop.GetValue(this) as IRedisCommonHashKeyMethods
-                               ?? Activator.CreateInstance(typeof(RedisHashKey<>).MakeGenericType(tArg), 1, null, null) as IRedisCommonHashKeyMethods;
-                    if (item == null) continue;
+                    var item = prop.GetValue(this) as IRedisHashKey
+                               ?? Activator.CreateInstance(typeof(RedisHashKey<>).MakeGenericType(tArg), 1, null, null) as IRedisHashKey;
                     prop.SetValue(this, item);
-
-                    Action publishAll = hasChannel
-                        ? () => { Sub?.Publish(Channel, $"{prop.Name}|all"); }
-                        : () => { };
-                    Action<string> publishField = hasChannel
-                        ? key => { Sub?.Publish(Channel, $"{prop.Name}|{key}"); }
-                        : _ => { };
-
-                    item.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
-                        publishAll,
-                        publishField,
-                        new RedisKey(fullKeyName), keepDataInMemory);
+                    item!.Init(Config, fullKeyName);
                 }
                 if (genDef == typeof(RedisPrefixedKeys<>))
                 {
-                    var item = prop.GetValue(this) as IRedisCommonHashKeyMethods
-                               ?? Activator.CreateInstance(typeof(RedisPrefixedKeys<>).MakeGenericType(tArg), 1, null, null) as IRedisCommonHashKeyMethods;
-                    if (item == null) continue;
+                    var item = prop.GetValue(this) as IRedisHashKey
+                               ?? Activator.CreateInstance(typeof(RedisPrefixedKeys<>).MakeGenericType(tArg), 1, null, null) as IRedisHashKey;
                     prop.SetValue(this, item);
-
-                    Action publishAll = hasChannel
-                        ? () => { Sub?.Publish(Channel, $"{prop.Name}|all"); }
-                        : () => { };
-                    Action<string> publishField = hasChannel
-                        ? key => { Sub?.Publish(Channel, $"{prop.Name}|{key}"); }
-                        : _ => { };
-
-                    item.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
-                        publishAll,
-                        publishField,
-                        new RedisKey(fullKeyName), keepDataInMemory);
+                    item!.Init(Config, fullKeyName);
                 }
                 else if (genDef == typeof(RedisKey<>))
                 {
-                    var item = prop.GetValue(this) as IRedisCommonKeyMethods
-                               ?? Activator.CreateInstance(typeof(RedisKey<>).MakeGenericType(tArg), 1, null, null) as IRedisCommonKeyMethods;
-                    if (item == null) continue;
+                    var item = prop.GetValue(this) as IRedisKey
+                               ?? Activator.CreateInstance(typeof(RedisKey<>).MakeGenericType(tArg), 1, null, null) as IRedisKey;
                     prop.SetValue(this, item);
-
-                    Action publish = hasChannel
-                        ? () => { Sub?.Publish(Channel, prop.Name); }
-                        : () => { };
-
-                    item.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead, publish,
-                        new RedisKey(fullKeyName), keepDataInMemory);
+                    item!.Init(Config, fullKeyName);
                 }
             }
-        }
-
-
-        /// <summary>
-        /// Returns the number of keys present in a given Redis logical database.
-        /// </summary>
-        public async Task<long> GetDbSize(int database)
-        {
-            var db = ConnectionMultiplexerRead.GetDatabase(database);
-            var keyCount = await db.ExecuteAsync("DBSIZE");
-            return Convert.ToInt32(keyCount.ToString());
-        }
-
-        /// <summary>
-        /// Retrieves a page of field names for a hash key using HashScan (cursor based) semantics.
-        /// </summary>
-        public async Task<(List<string>?, long)> GetHashKeysByPage(int database, string hashKey, int pageNumber = 1, int pageSize = 10)
-        {
-            var db = ConnectionMultiplexerRead.GetDatabase(database);
-            long cursor = (pageNumber - 1) * pageSize;
-            var keysRetrieved = 0;
-            var keys = new List<string>();
-            var hashLength = await db.HashLengthAsync(hashKey);
-            await foreach (var entry in db.HashScanAsync(hashKey, cursor: cursor, pageSize: pageSize))
-            {
-                keys.Add(entry.Name!);
-                keysRetrieved++;
-                if (keysRetrieved >= pageSize)
-                    break;
-            }
-
-            return (keys, hashLength);
-        }
-
-        /// <summary>
-        /// Reads and returns the string value for a simple key.
-        /// </summary>
-        public async Task<string?> GetValues(int database, string key)
-        {
-            var db = ConnectionMultiplexerRead.GetDatabase(database);
-            var hashEntries = await db.StringGetAsync(key);
-            return hashEntries;
         }
     }
 }

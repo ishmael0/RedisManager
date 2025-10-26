@@ -2,7 +2,6 @@
 using Newtonsoft.Json;
 using StackExchange.Redis;
 
-
 namespace Santel.Redis.TypedKeys
 {
     /// <summary>
@@ -11,7 +10,7 @@ namespace Santel.Redis.TypedKeys
     /// publish callbacks when values change.
     /// </summary>
     /// <typeparam name="T">Type of the value stored under the key.</typeparam>
-    public class RedisKey<T> : RedisCommonProperties<T>, IRedisCommonKeyMethods
+    public class RedisKey<T> : RedisCommonProperties<T>, IRedisKey
     {
         private readonly object _locker = new();
         private RedisDataWrapper<T>? _data;
@@ -31,6 +30,8 @@ namespace Santel.Redis.TypedKeys
             Serialize = (d) => JsonConvert.SerializeObject(serialize == null ? new RedisDataWrapper<T>(d) : new RedisDataWrapper<string>(serialize(d)));
             DeSerialize = (str) =>
             {
+                if (str == null)
+                    return null;    
                 if (deSerialize == null)
                     return JsonConvert.DeserializeObject<RedisDataWrapper<T>>(str)!;
                 var temp = JsonConvert.DeserializeObject<RedisDataWrapper<string>>(str);
@@ -40,43 +41,26 @@ namespace Santel.Redis.TypedKeys
                         DateTime = temp.DateTime,
                         PersianLastUpdate = temp.PersianLastUpdate
                     };
-#pragma warning disable CS8603 // Possible null reference return.
                 return null;
-#pragma warning restore CS8603 // Possible null reference return.
             };
+        }
+        public void Init(RedisDBContextModuleConfigs contexConfig, RedisKey fullName)
+        {
+            ContextConfig = contexConfig;
+            FullName = fullName;
+            Reader = ContextConfig.Reader.GetDatabase(DbIndex);
+            Writer = ContextConfig.Reader.GetDatabase(DbIndex);
         }
         /// <summary>
         /// Returns approximate memory usage (bytes) in Redis for this key using the MEMORY USAGE command.
         /// </summary>
         public long GetSize()
         {
-            var keyMemoryUsage = DbReader.Execute("MEMORY", "USAGE", FullName);
+            var keyMemoryUsage = Reader.Execute("MEMORY", "USAGE", FullName);
             return keyMemoryUsage.IsNull ? 0 : Convert.ToInt64(keyMemoryUsage.ToString());
         }
-        /// <summary>
-        /// Initializes the key with required infrastructure objects.
-        /// </summary>
-        /// <param name="logger">Logger instance.</param>
-        /// <param name="cnWriter">Optional writer connection multiplexer.</param>
-        /// <param name="cnReader">Reader connection multiplexer.</param>
-        /// <param name="publish">Callback invoked after a successful write.</param>
-        /// <param name="fullName">Fully qualified Redis key name.</param>
-        /// <param name="keepDataInMemory">If true caches the last read/written value.</param>
-        public void Init(ILogger logger,
-            IConnectionMultiplexer? cnWriter,
-            IConnectionMultiplexer cnReader,
-            Action publish,
-            RedisKey fullName,
-            bool keepDataInMemory)
-        {
-            Publish = publish;
-            Logger = logger;
-            DbReader = cnReader.GetDatabase(DbIndex);
-            if (cnWriter != null)
-                DbWriter = cnWriter.GetDatabase(DbIndex);
-            FullName = fullName;
-            KeepDataInMemory = keepDataInMemory;
-        }
+
+
         /// <summary>
         /// Reads the full wrapper (value plus metadata) optionally forcing a fresh Redis fetch.
         /// </summary>
@@ -90,13 +74,13 @@ namespace Santel.Redis.TypedKeys
             {
                 lock (_locker)
                 {
-                    var temp = DbReader.StringGet(FullName).ToString();
+                    var temp = Reader.StringGet(FullName).ToString();
                     if (string.IsNullOrEmpty(temp))
                         return default;
                     var data = DeSerialize(temp);
                     if (data != null)
                     {
-                        if (KeepDataInMemory)
+                        if (ContextConfig.KeepDataInMemory)
                             _data = data;
                         return data;
                     }
@@ -104,7 +88,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"In RedisManager, in reading {FullName}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}");
             }
             if (_data != null)
                 return _data;
@@ -132,21 +116,21 @@ namespace Santel.Redis.TypedKeys
                 return _data.Data;
             try
             {
-                var temp = (await DbReader.StringGetAsync(FullName)).ToString();
+                var temp = (await Reader.StringGetAsync(FullName)).ToString();
                 if (string.IsNullOrEmpty(temp))
                     return default;
                 var data = DeSerialize(temp);
                 lock (_locker)
                     if (data != null)
                     {
-                        if (KeepDataInMemory)
+                        if (ContextConfig. KeepDataInMemory)
                             _data = data;
                         return data.Data;
                     }
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"In RedisManager, in reading {FullName}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}");
             }
             if (_data != null)
                 return _data.Data;
@@ -163,16 +147,16 @@ namespace Santel.Redis.TypedKeys
             if (d == null) return false;
             try
             {
-                var res = DbWriter.StringSet(FullName, Serialize(d));
+                var res = Writer.StringSet(FullName, Serialize(d));
                 Publish();
-                if (KeepDataInMemory)
+                if (ContextConfig.KeepDataInMemory)
                     lock (_locker)
                         _data = new RedisDataWrapper<T>(d);
                 return res;
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"In RedisManager, in Writing {FullName}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}");
                 return false;
             }
         }
@@ -186,8 +170,8 @@ namespace Santel.Redis.TypedKeys
             if (d == null) return false;
             try
             {
-                var res = await DbWriter.StringSetAsync(FullName, Serialize(d));
-                if (KeepDataInMemory)
+                var res = await Writer.StringSetAsync(FullName, Serialize(d));
+                if (ContextConfig.KeepDataInMemory)
                     lock (_locker)
                         _data = new RedisDataWrapper<T>(d);
                 Publish();
@@ -195,7 +179,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"In RedisManager, in Writing {FullName}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}");
                 return false;
             }
         }
@@ -214,7 +198,7 @@ namespace Santel.Redis.TypedKeys
         /// <param name="key">Hash field name.</param>
         public RedisValue this[string key]
         {
-            get => DbReader.HashGet(FullName, key);
+            get => Reader.HashGet(FullName, key);
         }
     }
 }

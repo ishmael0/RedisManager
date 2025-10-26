@@ -1,19 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Santel.Redis.TypedKeys;
 using StackExchange.Redis;
 
 // Simple console demo for Santel.Redis.TypedKeys
-using var loggerFactory = LoggerFactory.Create(builder =>
-{
-    builder
-        .AddConsole()
-        .SetMinimumLevel(LogLevel.Information);
-});
-
-// Create a typed logger (ILogger<Program>)
-var logger = loggerFactory.CreateLogger<AppRedisContext>();
-var ctx = new AppRedisContext(ConnectionMultiplexer.Connect("localhost:6379"), true, logger);
+var ctx = new AppRedisContext(new RedisDBContextOptions { ConnectionMultiplexer = ConnectionMultiplexer.Connect("localhost:6379") });
 
 // DI setup
 //{
@@ -54,12 +44,8 @@ public class AppRedisContext : RedisDBContextModule
     public RedisHashKey<UserProfile> Users { get; set; } = new(1);
     public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(2);
 
-    public AppRedisContext(IConnectionMultiplexer mux,
-                           bool keepDataInMemory,
-                           ILogger<AppRedisContext> logger,
-                           Func<string, string>? nameGeneratorStrategy = null,
-                           string? channelName = null)
-        : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
+    public AppRedisContext(RedisDBContextOptions opts)
+        : base(opts)
     {
     }
 

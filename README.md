@@ -48,7 +48,8 @@ public class AppRedisContext : RedisDBContextModule
         serialize: inv => JsonConvert.SerializeObject(inv, Formatting.None),
         deSerialize: s => JsonConvert.DeserializeObject<Invoice>(s)!);
 
-    // NOTE: RedisPrefixedKeys<T> is available for "FullName:field" storage. See section below.
+    // DB 3: prefixed string keys (stored as "FullName:field")
+    public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(3);
 
     // Separate read/write multiplexers (good with replicas)
     public AppRedisContext(IConnectionMultiplexer writer,
@@ -57,7 +58,18 @@ public class AppRedisContext : RedisDBContextModule
                            Func<string, string>? nameGeneratorStrategy = null,
                            bool keepDataInMemory = true,
                            string? channelName = null)
-        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName) { }
+        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
+    {
+        // Initialize the prefixed keys in one line (no separate setup block)
+        UserById.Init(
+            logger,
+            writer,
+            reader,
+            () => Sub?.Publish(Channel, $"{nameof(UserById)}|all"),
+            field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}"),
+            new RedisKey(nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById)),
+            keepDataInMemory);
+    }
 
     // Single-multiplexer overload (read = write)
     public AppRedisContext(IConnectionMultiplexer mux,
@@ -65,7 +77,17 @@ public class AppRedisContext : RedisDBContextModule
                            Func<string, string>? nameGeneratorStrategy = null,
                            bool keepDataInMemory = true,
                            string? channelName = null)
-        : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName) { }
+        : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
+    {
+        UserById.Init(
+            logger,
+            mux,
+            mux,
+            () => Sub?.Publish(Channel, $"{nameof(UserById)}|all"),
+            field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}"),
+            new RedisKey(nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById)),
+            keepDataInMemory);
+    }
 }
 
 public record UserProfile(int Id, string Name)
@@ -107,6 +129,11 @@ string? version = ctx.AppVersion.Read();
 ctx.Users.Write("42", new UserProfile(42, "Alice"));
 var alice = ctx.Users.Read("42");
 
+// Prefixed: stored as "UserById:42"
+await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
+var byId = await ctx.UserById.ReadAsync("42");
+await ctx.UserById.RemoveAsync("42");
+
 // Hash: bulk write + publish-all for cross-process invalidation
 await ctx.Users.WriteAsync(new Dictionary<string, UserProfile>
 {
@@ -117,51 +144,6 @@ await ctx.Users.WriteAsync(new Dictionary<string, UserProfile>
 // Hash: multi-read
 var batch = ctx.Users.Read(new[] { "1", "2" });
 ```
-
----
-
-## Prefixed string keys: FullName:field
-`RedisPrefixedKeys<T>` stores each field as its own Redis string key using the pattern `"FullName:field"`.
-- Good when you prefer independent string keys instead of a Redis hash.
-- Supports per-field in-memory caching, publish per field, and publish-all.
-- Note: key enumeration helpers are not provided by default. If you need listing based on a pattern, implement it in your app or track field names explicitly.
-
-Setup (manual init in your context):
-```csharp
-public class AppRedisContext : RedisDBContextModule
-{
-    public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(3);
-
-    public AppRedisContext(IConnectionMultiplexer writer,
-                           IConnectionMultiplexer reader,
-                           ILogger<AppRedisContext> logger,
-                           Func<string, string>? nameGeneratorStrategy = null,
-                           bool keepDataInMemory = true,
-                           string? channelName = null)
-        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
-    {
-        // Name and publish setup (mirrors hash semantics)
-        var name = nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById);
-        Action publishAll = string.IsNullOrWhiteSpace(channelName)
-            ? () => { }
-            : () => Sub?.Publish(Channel, $"{nameof(UserById)}|all");
-        Action<string> publish = string.IsNullOrWhiteSpace(channelName)
-            ? _ => { }
-            : field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}");
-
-        UserById.Init(logger, writer, reader, publishAll, publish, new RedisKey(name), keepDataInMemory);
-    }
-}
-
-// Usage
-await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
-var u = await ctx.UserById.ReadAsync("42");
-await ctx.UserById.RemoveAsync("42");
-```
-
-Pub/Sub payloads (same pattern as hash):
-- Per field: `KeyName|{field}`
-- Publish-all: `KeyName|all`
 
 ---
 
@@ -247,7 +229,7 @@ RedisHashKey<T>
 - Publish all: `DoPublishAll()`
 
 RedisPrefixedKeys<T>
-- Construction: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);` (manual `Init`)
+- Construction: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);`
 - Write single: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
 - Write bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false)`
 - Read single: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
@@ -308,8 +290,6 @@ The factory tries these constructors in order:
 1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 
-Note: `RedisPrefixedKeys<T>` is currently initialized manually (see section above).
-
 ---
 
 ## Best Practices
@@ -339,4 +319,4 @@ Note: `RedisPrefixedKeys<T>` is currently initialized manually (see section abov
 MIT
 
 ## Contributing
-Issues and PRs are welcome.Issues and PRs are welcome.
+Issues and PRs are welcome.

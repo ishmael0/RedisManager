@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31912.275
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Santel.Redis.TypedKeys", "AspNetLib\Santel.Redis.TypedKeys.csproj", "{E6C9CFB4-1F6E-4B31-873E-AC7B6125E584}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Example", "Example\Example.csproj", "{AC096326-A594-4C54-8498-C2645E98E18E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,6 +16,10 @@ Global
 		{E6C9CFB4-1F6E-4B31-873E-AC7B6125E584}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E6C9CFB4-1F6E-4B31-873E-AC7B6125E584}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E6C9CFB4-1F6E-4B31-873E-AC7B6125E584}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC096326-A594-4C54-8498-C2645E98E18E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC096326-A594-4C54-8498-C2645E98E18E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC096326-A594-4C54-8498-C2645E98E18E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC096326-A594-4C54-8498-C2645E98E18E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

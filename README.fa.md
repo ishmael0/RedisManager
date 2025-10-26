@@ -45,24 +45,44 @@ public class AppRedisContext : RedisDBContextModule
         serialize: inv => JsonConvert.SerializeObject(inv, Formatting.None),
         deSerialize: s => JsonConvert.DeserializeObject<Invoice>(s)!);
 
-    // توجه: برای ذخیره به شکل "FullName:field" می‌تونی از `RedisPrefixedKeys<T>` استفاده کنی (بخش پایین)
+    // DB 3: کلیدهای رشته‌ای با پیشوند (FullName:field)
+    public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(3);
 
-    // reader/write جدا
     public AppRedisContext(IConnectionMultiplexer writer,
                            IConnectionMultiplexer reader,
                            ILogger<AppRedisContext> logger,
                            Func<string, string>? nameGeneratorStrategy = null,
                            bool keepDataInMemory = true,
                            string? channelName = null)
-        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName) { }
+        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
+    {
+        // Init یک‌خطی برای prefixed (بدون بلاک جداگانه)
+        UserById.Init(
+            logger,
+            writer,
+            reader,
+            () => Sub?.Publish(Channel, $"{nameof(UserById)}|all"),
+            field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}"),
+            new RedisKey(nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById)),
+            keepDataInMemory);
+    }
 
-    // تک multiplexer
     public AppRedisContext(IConnectionMultiplexer mux,
                            ILogger<AppRedisContext> logger,
                            Func<string, string>? nameGeneratorStrategy = null,
                            bool keepDataInMemory = true,
                            string? channelName = null)
-        : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName) { }
+        : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
+    {
+        UserById.Init(
+            logger,
+            mux,
+            mux,
+            () => Sub?.Publish(Channel, $"{nameof(UserById)}|all"),
+            field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}"),
+            new RedisKey(nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById)),
+            keepDataInMemory);
+    }
 }
 
 public record UserProfile(int Id, string Name)
@@ -100,59 +120,19 @@ string? version = ctx.AppVersion.Read();
 ctx.Users.Write("42", new UserProfile(42, "Alice"));
 var alice = ctx.Users.Read("42");
 
+// Prefixed: ذخیره به شکل "UserById:42"
+await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
+var u = await ctx.UserById.ReadAsync("42");
+await ctx.UserById.RemoveAsync("42");
+
 await ctx.Users.WriteAsync(new Dictionary<string, UserProfile>
 {
     ["1"] = new(1, "Bob"),
     ["2"] = new(2, "Carol")
-}, forceToPublish: true); // اگه channelName ست شده باشه، "Users|all" منتشر میشه
+}, forceToPublish: true); // "Users|all" اگر channelName ست باشد منتشر می‌شود
 
 var batch = ctx.Users.Read(new[] { "1", "2" });
 ```
-
----
-
-## کلید رشته‌ای با پیشوند: FullName:field
-`RedisPrefixedKeys<T>` هر field را به‌صورت یک کلید مستقل ذخیره می‌کند با الگوی `"FullName:field"`.
-- مناسب زمانی که به‌جای hash، کلیدهای مستقل string می‌خوای.
-- کش درون‌حافظه‌ای برای هر field، publish برای هر field و publish-all پشتیبانی می‌شود.
-- نکته: ابزار لیست‌کردن کلیدها/fieldها به‌صورت پیش‌فرض ارائه نشده. در صورت نیاز خودت الگوپردازی یا ردیابی نام fieldها را در برنامه پیاده‌سازی کن.
-
-راه‌اندازی (init دستی داخل context):
-```csharp
-public class AppRedisContext : RedisDBContextModule
-{
-    public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(3);
-
-    public AppRedisContext(IConnectionMultiplexer writer,
-                           IConnectionMultiplexer reader,
-                           ILogger<AppRedisContext> logger,
-                           Func<string, string>? nameGeneratorStrategy = null,
-                           bool keepDataInMemory = true,
-                           string? channelName = null)
-        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
-    {
-        // نام و publish (هم‌الگوی hash)
-        var name = nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById);
-        Action publishAll = string.IsNullOrWhiteSpace(channelName)
-            ? () => { }
-            : () => Sub?.Publish(Channel, $"{nameof(UserById)}|all");
-        Action<string> publish = string.IsNullOrWhiteSpace(channelName)
-            ? _ => { }
-            : field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}");
-
-        UserById.Init(logger, writer, reader, publishAll, publish, new RedisKey(name), keepDataInMemory);
-    }
-}
-
-// استفاده
-await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
-var u = await ctx.UserById.ReadAsync("42");
-await ctx.UserById.RemoveAsync("42");
-```
-
-Payloadهای Pub/Sub (مثل hash):
-- برای هر field: `KeyName|{field}`
-- برای همه: `KeyName|all`
 
 ---
 
@@ -238,7 +218,7 @@ RedisHashKey<T>
 - publish-all: `DoPublishAll()`
 
 RedisPrefixedKeys<T>
-- تعریف: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);` (init دستی)
+- تعریف: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);`
 - نوشتن: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
 - نوشتن bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false)`
 - خوندن: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
@@ -294,8 +274,6 @@ services.AddRedisDBContext<AppRedisContext>(
 Constructorها به این ترتیبه:
 1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
-
-نکته: `RedisPrefixedKeys<T>` فعلاً به‌صورت دستی init می‌شود (مثال بالا).
 
 ---
 

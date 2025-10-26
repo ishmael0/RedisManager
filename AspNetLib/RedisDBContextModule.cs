@@ -92,10 +92,8 @@ namespace Santel.Redis.TypedKeys
                         c.GType.SetValue(this, item);
                     }
 
-                    // Key naming logic
                     var fullKeyName = nameGeneratorStrategy != null ? nameGeneratorStrategy(c.Name) : c.Name;// string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}_{c.Name}";
 
-                    // Publish delegates (no-ops if channel not provided)
                     Action publishAll = hasChannel
                         ? () => { Sub?.Publish(Channel, $"{c.Name}|all"); }
                     : () => { };
@@ -109,7 +107,6 @@ namespace Santel.Redis.TypedKeys
                         new RedisKey(fullKeyName), keepDataInMemory);
                 });
 
-            // Initialize RedisKey<T> properties
             GetType().GetProperties().Where(c =>
                     c.PropertyType.IsGenericType && c.PropertyType.GetGenericTypeDefinition() == typeof(RedisKey<>))
                 .Select(c => new { GType = c, Type = c.PropertyType.GetGenericArguments()[0], c.Name })

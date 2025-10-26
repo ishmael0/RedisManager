@@ -85,4 +85,25 @@ namespace Santel.Redis.TypedKeys
             RedisKey fullName,
             bool keepDataInMemory);
     }
+    public interface IRedisCommonPrefixKeyMethods
+    {
+        /// <summary>
+        /// Removes a single cached field value forcing a Redis fetch next time.
+        /// </summary>
+        public void ForceToReFetch(string key);
+        /// <summary>
+        /// Clears the entire in-memory cache for the hash.
+        /// </summary>
+        public void ForceToReFetchAll();
+        /// <summary>
+        /// Initializes the hash key with connections and metadata.
+        /// </summary>
+        public void Init(ILogger logger,
+            IConnectionMultiplexer? cnWriter,
+            IConnectionMultiplexer cnReader,
+            Action publishAll,
+            Action<string> publish,
+            RedisKey fullName,
+            bool keepDataInMemory);
+    }
 }

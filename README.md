@@ -8,6 +8,7 @@ Typed, discoverable Redis keys for .NET 9. Focus on developer ergonomics: concis
 
 ## Highlights
 - Strongly-typed wrappers for simple keys and hash maps: `RedisKey<T>`, `RedisHashKey<T>`
+- Prefixed string keys stored as separate keys: `RedisPrefixedKeys<T>` (format: `FullName:field`)
 - One central context (`RedisDBContextModule`) where you declare all keys
 - Optional per-key/per-field in-memory cache with easy invalidation
 - Built-in lightweight pub/sub notifications for cross-process cache invalidation
@@ -46,6 +47,8 @@ public class AppRedisContext : RedisDBContextModule
     public RedisHashKey<Invoice> Invoices { get; set; } = new(2,
         serialize: inv => JsonConvert.SerializeObject(inv, Formatting.None),
         deSerialize: s => JsonConvert.DeserializeObject<Invoice>(s)!);
+
+    // NOTE: RedisPrefixedKeys<T> is available for "FullName:field" storage. See section below.
 
     // Separate read/write multiplexers (good with replicas)
     public AppRedisContext(IConnectionMultiplexer writer,
@@ -117,6 +120,51 @@ var batch = ctx.Users.Read(new[] { "1", "2" });
 
 ---
 
+## Prefixed string keys: FullName:field
+`RedisPrefixedKeys<T>` stores each field as its own Redis string key using the pattern `"FullName:field"`.
+- Good when you prefer independent string keys instead of a Redis hash.
+- Supports per-field in-memory caching, publish per field, and publish-all.
+- Note: key enumeration helpers are not provided by default. If you need listing based on a pattern, implement it in your app or track field names explicitly.
+
+Setup (manual init in your context):
+```csharp
+public class AppRedisContext : RedisDBContextModule
+{
+    public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(3);
+
+    public AppRedisContext(IConnectionMultiplexer writer,
+                           IConnectionMultiplexer reader,
+                           ILogger<AppRedisContext> logger,
+                           Func<string, string>? nameGeneratorStrategy = null,
+                           bool keepDataInMemory = true,
+                           string? channelName = null)
+        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
+    {
+        // Name and publish setup (mirrors hash semantics)
+        var name = nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById);
+        Action publishAll = string.IsNullOrWhiteSpace(channelName)
+            ? () => { }
+            : () => Sub?.Publish(Channel, $"{nameof(UserById)}|all");
+        Action<string> publish = string.IsNullOrWhiteSpace(channelName)
+            ? _ => { }
+            : field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}");
+
+        UserById.Init(logger, writer, reader, publishAll, publish, new RedisKey(name), keepDataInMemory);
+    }
+}
+
+// Usage
+await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
+var u = await ctx.UserById.ReadAsync("42");
+await ctx.UserById.RemoveAsync("42");
+```
+
+Pub/Sub payloads (same pattern as hash):
+- Per field: `KeyName|{field}`
+- Publish-all: `KeyName|all`
+
+---
+
 ## Key Naming & Pub/Sub
 - Naming: by default, key name = `PropertyName`.
 - If you supply `nameGeneratorStrategy`, it receives `PropertyName` and returns the final Redis key name.
@@ -128,6 +176,7 @@ var batch = ctx.Users.Read(new[] { "1", "2" });
   - `RedisKey<T>` publish payload: `KeyName`
   - `RedisHashKey<T>` publish field: `HashName|{field}`
   - `RedisHashKey<T>` publish-all: `HashName|all`
+  - `RedisPrefixedKeys<T>` follows the same pattern as hash
 
 Subscribe example:
 ```csharp
@@ -137,11 +186,11 @@ await sub.SubscribeAsync("Prod", (ch, msg) =>
     var text = (string)msg;
     if (text.EndsWith("|all"))
     {
-        // Invalidate entire hash cache for that key
+        // Invalidate entire cache for that name (hash or prefixed)
     }
     else if (text.Contains('|'))
     {
-        var parts = text.Split('|'); // parts[0] = hash, parts[1] = field
+        var parts = text.Split('|'); // parts[0] = name, parts[1] = field
         // Invalidate a single field cache
     }
     else
@@ -159,13 +208,18 @@ Note: Publishing is performed via the write multiplexer; subscribing can use the
 Enable or disable by `keepDataInMemory` in the constructor or DI extension.
 - `RedisKey<T>`: caches the last `RedisDataWrapper<T>` read or written
 - `RedisHashKey<T>`: caches individual field wrappers on-demand
+- `RedisPrefixedKeys<T>`: caches individual field wrappers on-demand
 
 Invalidation helpers:
 ```csharp
 ctx.AppVersion.ForceToReFetch();        // drop the simple key cache
-ctx.Users.ForceToReFetch("42");        // drop one field cache
+ctx.Users.ForceToReFetch("42");        // drop one field cache (hash)
 ctx.Users.ForceToReFetchAll();          // drop all cached fields for that hash
-ctx.Users.DoPublishAll();               // publish "Users|all" to the channel
+ctx.Users.DoPublishAll();               // publish "Users|all"
+// For prefixed keys
+ctx.UserById.ForceToReFetch("42");
+ctx.UserById.ForceToReFetchAll();
+ctx.UserById.DoPublishAll();
 ```
 
 ---
@@ -189,6 +243,16 @@ RedisHashKey<T>
 - Read multi: `IDictionary<string,T?> Read(IEnumerable<string> fields)`
 - Remove: `Task<bool> RemoveAsync(string field)` / multi-field overload
 - Remove whole hash: `Task<bool> RemoveAsync()`
+- Cache control: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
+- Publish all: `DoPublishAll()`
+
+RedisPrefixedKeys<T>
+- Construction: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);` (manual `Init`)
+- Write single: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
+- Write bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false)`
+- Read single: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
+- Read multi: `IDictionary<string,T> Read(IEnumerable<string> fields)`
+- Remove: `Task<bool> RemoveAsync(string field)` / multi-field overload
 - Cache control: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
 - Publish all: `DoPublishAll()`
 
@@ -244,7 +308,7 @@ The factory tries these constructors in order:
 1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 
-You can still register manually if you need custom wiring.
+Note: `RedisPrefixedKeys<T>` is currently initialized manually (see section above).
 
 ---
 
@@ -275,4 +339,4 @@ You can still register manually if you need custom wiring.
 MIT
 
 ## Contributing
-Issues and PRs are welcome.
+Issues and PRs are welcome.Issues and PRs are welcome.

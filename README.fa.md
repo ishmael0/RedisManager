@@ -10,6 +10,7 @@
 
 ## چی داره برات؟
 - `RedisKey<T>` و `RedisHashKey<T>` برای کار با key و hash به‌صورت تایپی
+- کلیدهای رشته‌ای با پیشوند ثابت به‌صورت جداگانه: `RedisPrefixedKeys<T>` (فرمت ذخیره: `FullName:field`)
 - یه context مرکزی (`RedisDBContextModule`) که توش همهٔ keyها رو تعریف می‌کنی
 - cache اختیاری برای key و fieldها (حافظهٔ داخل برنامه)
 - pub/sub سبک برای invalidation بین چند پروسه
@@ -43,6 +44,8 @@ public class AppRedisContext : RedisDBContextModule
     public RedisHashKey<Invoice> Invoices { get; set; } = new(2,
         serialize: inv => JsonConvert.SerializeObject(inv, Formatting.None),
         deSerialize: s => JsonConvert.DeserializeObject<Invoice>(s)!);
+
+    // توجه: برای ذخیره به شکل "FullName:field" می‌تونی از `RedisPrefixedKeys<T>` استفاده کنی (بخش پایین)
 
     // reader/write جدا
     public AppRedisContext(IConnectionMultiplexer writer,
@@ -108,6 +111,51 @@ var batch = ctx.Users.Read(new[] { "1", "2" });
 
 ---
 
+## کلید رشته‌ای با پیشوند: FullName:field
+`RedisPrefixedKeys<T>` هر field را به‌صورت یک کلید مستقل ذخیره می‌کند با الگوی `"FullName:field"`.
+- مناسب زمانی که به‌جای hash، کلیدهای مستقل string می‌خوای.
+- کش درون‌حافظه‌ای برای هر field، publish برای هر field و publish-all پشتیبانی می‌شود.
+- نکته: ابزار لیست‌کردن کلیدها/fieldها به‌صورت پیش‌فرض ارائه نشده. در صورت نیاز خودت الگوپردازی یا ردیابی نام fieldها را در برنامه پیاده‌سازی کن.
+
+راه‌اندازی (init دستی داخل context):
+```csharp
+public class AppRedisContext : RedisDBContextModule
+{
+    public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(3);
+
+    public AppRedisContext(IConnectionMultiplexer writer,
+                           IConnectionMultiplexer reader,
+                           ILogger<AppRedisContext> logger,
+                           Func<string, string>? nameGeneratorStrategy = null,
+                           bool keepDataInMemory = true,
+                           string? channelName = null)
+        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
+    {
+        // نام و publish (هم‌الگوی hash)
+        var name = nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById);
+        Action publishAll = string.IsNullOrWhiteSpace(channelName)
+            ? () => { }
+            : () => Sub?.Publish(Channel, $"{nameof(UserById)}|all");
+        Action<string> publish = string.IsNullOrWhiteSpace(channelName)
+            ? _ => { }
+            : field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}");
+
+        UserById.Init(logger, writer, reader, publishAll, publish, new RedisKey(name), keepDataInMemory);
+    }
+}
+
+// استفاده
+await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
+var u = await ctx.UserById.ReadAsync("42");
+await ctx.UserById.RemoveAsync("42");
+```
+
+Payloadهای Pub/Sub (مثل hash):
+- برای هر field: `KeyName|{field}`
+- برای همه: `KeyName|all`
+
+---
+
 ## نام‌گذاری key و Pub/Sub
 - نام‌گذاری: پیش‌فرض برابر با `PropertyName` هست.
 - اگه `nameGeneratorStrategy` بدی، بهش `PropertyName` پاس می‌شه و اسم نهایی key رو برمی‌گردونه.
@@ -118,7 +166,8 @@ var batch = ctx.Users.Read(new[] { "1", "2" });
 - channel برای publish با `channelName` مشخص میشه.
   - `RedisKey<T>`: `KeyName`
   - `RedisHashKey<T>` (field): `HashName|{field}`
-  - publish-all: `HashName|all`
+  - `RedisHashKey<T>` (publish-all): `HashName|all`
+  - `RedisPrefixedKeys<T>` هم از همین الگو تبعیت می‌کند.
 
 نمونه subscribe:
 ```csharp
@@ -128,16 +177,16 @@ await sub.SubscribeAsync("Prod", (ch, msg) =>
     var text = (string)msg;
     if (text.EndsWith("|all"))
     {
-        // کل cache همون hash رو خالی کن
+        // کل cache همان نام (hash یا prefixed) را خالی کن
     }
     else if (text.Contains('|'))
     {
-        var parts = text.Split('|'); // parts[0] = hash، parts[1] = field
-        // cache همون field رو خالی کن
+        var parts = text.Split('|'); // parts[0] = name، parts[1] = field
+        // cache همان field را خالی کن
     }
     else
     {
-        // key ساده تغییر کرد؛ cacheش رو خالی کن
+        // key ساده تغییر کرد؛ cacheش را خالی کن
     }
 });
 ```
@@ -150,13 +199,18 @@ await sub.SubscribeAsync("Prod", (ch, msg) =>
 - با `keepDataInMemory` روشن/خاموشش کن.
 - `RedisKey<T>`: آخرین مقدار (داخل `RedisDataWrapper<T>`) cache میشه
 - `RedisHashKey<T>`: هر field جداگانه cache میشه
+- `RedisPrefixedKeys<T>`: هر field جداگانه cache میشه
 
 ابزار invalidate:
 ```csharp
-ctx.AppVersion.ForceToReFetch();
-ctx.Users.ForceToReFetch("42");
-ctx.Users.ForceToReFetchAll();
-ctx.Users.DoPublishAll();
+ctx.AppVersion.ForceToReFetch();        // کش key ساده را خالی کن
+ctx.Users.ForceToReFetch("42");        // یک field از hash
+ctx.Users.ForceToReFetchAll();          // همهٔ fieldهای hash
+ctx.Users.DoPublishAll();               // "Users|all" را publish کن
+// برای prefixed
+ctx.UserById.ForceToReFetch("42");
+ctx.UserById.ForceToReFetchAll();
+ctx.UserById.DoPublishAll();
 ```
 
 ---
@@ -177,13 +231,23 @@ RedisHashKey<T>
 - نوشتن field: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
 - نوشتن bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false, int maxChunkSizeInBytes = 1024*128)`
 - خوندن field: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
-- خوندن چند field: `IDictionary<string,T?> Read(IEnumerable<string> fields)`
+- خوندن چند field: `IDictionary<string,T> Read(IEnumerable<string> fields)`
 - حذف: `Task<bool> RemoveAsync(string field)` / حذف چند field
 - حذف کل hash: `Task<bool> RemoveAsync()`
 - cache: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
 - publish-all: `DoPublishAll()`
 
-کمک‌های context
+RedisPrefixedKeys<T>
+- تعریف: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);` (init دستی)
+- نوشتن: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
+- نوشتن bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false)`
+- خوندن: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
+- خوندن چند field: `IDictionary<string,T> Read(IEnumerable<string> fields)`
+- حذف: `Task<bool> RemoveAsync(string field)` / چندتایی
+- cache: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
+- publish-all: `DoPublishAll()`
+
+ابزارهای context
 - `Task<long> GetDbSize(int database)`
 - `Task<(List<string>? Keys, long Total)> GetHashKeysByPage(int database, string hashKey, int pageNumber = 1, int pageSize = 10)`
 - `Task<string?> GetValues(int database, string key)`
@@ -211,7 +275,7 @@ await ctx.Invoices.WriteAsync(
 
 ---
 
-## Custom serialization
+## Serialization سفارشی
 ```csharp
 public RedisHashKey<Invoice> Invoices { get; set; } = new(2,
     serialize: inv => JsonSerializer.Serialize(inv),
@@ -231,6 +295,8 @@ Constructorها به این ترتیبه:
 1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 
+نکته: `RedisPrefixedKeys<T>` فعلاً به‌صورت دستی init می‌شود (مثال بالا).
+
 ---
 
 ## نکته‌ها
@@ -246,7 +312,7 @@ Constructorها به این ترتیبه:
 - پیام pub/sub نمی‌رسه؟ ببین `channelName` ست شده و publish از write connection انجام میشه.
 - دیتا قدیمیه؟ `keepDataInMemory` و invalidate شدن cacheها رو چک کن.
 - روی bulk write timeout می‌گیری؟ اندازهٔ `maxChunkSizeInBytes` رو کمتر کن.
-- DB size صفره؟ ممکنه بعضی سرویس‌ها دستوراتی مثل `DBSIZE` رو بسته باشن.
+- DB size صفره؟ بعضی ارائه‌دهنده‌ها بعضی دستورات (مثل `DBSIZE`) رو می‌بندن.
 
 ---
 

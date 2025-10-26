@@ -44,6 +44,7 @@ namespace Santel.Redis.TypedKeys
         /// <param name="logger">Logger instance.</param>
         /// <param name="nameGeneratorStrategy"></param>
         /// <param name="channelName">Pub/Sub channel name. If null/empty no publish operations are performed.</param>
+        public RedisDBContextModule() { }
         public RedisDBContextModule(IConnectionMultiplexer connectionMultiplexerWrite,
             IConnectionMultiplexer connectionMultiplexerRead,
             bool keepDataInMemory,

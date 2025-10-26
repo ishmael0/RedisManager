@@ -29,73 +29,23 @@ dotnet add package Santel.Redis.TypedKeys
 
 ## Quick Start
 
-1) Define your context (a class inheriting `RedisDBContextModule`) and declare your keys:
+1) Define your context (a class inheriting `RedisDBContextModule`) and declare your keys. You can omit constructors entirely – DI will initialize the context automatically:
 ```csharp
-using Newtonsoft.Json;
 using Santel.Redis.TypedKeys;
-using StackExchange.Redis;
 
 public class AppRedisContext : RedisDBContextModule
 {
-    // DB 0: simple string key
     public RedisKey<string> AppVersion { get; set; } = new(0);
-
-    // DB 1: user profiles stored in a hash (field = userId)
     public RedisHashKey<UserProfile> Users { get; set; } = new(1);
-
-    // DB 2: invoices with custom serialization
-    public RedisHashKey<Invoice> Invoices { get; set; } = new(2,
-        serialize: inv => JsonConvert.SerializeObject(inv, Formatting.None),
-        deSerialize: s => JsonConvert.DeserializeObject<Invoice>(s)!);
-
-    // DB 3: prefixed string keys (stored as "FullName:field")
+    public RedisHashKey<Invoice> Invoices { get; set; } = new(2);
     public RedisPrefixedKeys<UserProfile> UserById { get; set; } = new(3);
-
-    // Separate read/write multiplexers (good with replicas)
-    public AppRedisContext(IConnectionMultiplexer writer,
-                           IConnectionMultiplexer reader,
-                           ILogger<AppRedisContext> logger,
-                           Func<string, string>? nameGeneratorStrategy = null,
-                           bool keepDataInMemory = true,
-                           string? channelName = null)
-        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
-    {
-        // Initialize the prefixed keys in one line (no separate setup block)
-        UserById.Init(
-            logger,
-            writer,
-            reader,
-            () => Sub?.Publish(Channel, $"{nameof(UserById)}|all"),
-            field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}"),
-            new RedisKey(nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById)),
-            keepDataInMemory);
-    }
-
-    // Single-multiplexer overload (read = write)
-    public AppRedisContext(IConnectionMultiplexer mux,
-                           ILogger<AppRedisContext> logger,
-                           Func<string, string>? nameGeneratorStrategy = null,
-                           bool keepDataInMemory = true,
-                           string? channelName = null)
-        : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName)
-    {
-        UserById.Init(
-            logger,
-            mux,
-            mux,
-            () => Sub?.Publish(Channel, $"{nameof(UserById)}|all"),
-            field => Sub?.Publish(Channel, $"{nameof(UserById)}|{field}"),
-            new RedisKey(nameGeneratorStrategy?.Invoke(nameof(UserById)) ?? nameof(UserById)),
-            keepDataInMemory);
-    }
 }
 
-public record UserProfile(int Id, string Name)
-{
-    public UserProfile() : this(0, string.Empty) { }
-}
+public record UserProfile(int Id, string Name);
 public record Invoice(string Id, decimal Amount);
 ```
+
+Note: Do not call any Init methods. `RedisDBContextModule` automatically initializes all declared `RedisKey<T>`, `RedisHashKey<T>`, and `RedisPrefixedKeys<T>` via reflection when the context instance is constructed by DI.
 
 2) Register with DI
 ```csharp
@@ -109,7 +59,6 @@ services.AddSingleton<IConnectionMultiplexer>(sp =>
 services.AddLogging();
 
 // Registers your derived context via generic extension.
-// It will try the single-multiplexer ctor first, then the dual-mux ctor.
 services.AddRedisDBContext<AppRedisContext>(
     keepDataInMemory: true,
     nameGeneratorStrategy: name => $"Prod_{name}",
@@ -121,28 +70,14 @@ services.AddRedisDBContext<AppRedisContext>(
 var sp = services.BuildServiceProvider();
 var ctx = sp.GetRequiredService<AppRedisContext>();
 
-// Simple key
 ctx.AppVersion.Write("1.5.0");
-string? version = ctx.AppVersion.Read();
+var version = ctx.AppVersion.Read();
 
-// Hash: single field
 ctx.Users.Write("42", new UserProfile(42, "Alice"));
 var alice = ctx.Users.Read("42");
 
-// Prefixed: stored as "UserById:42"
 await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
 var byId = await ctx.UserById.ReadAsync("42");
-await ctx.UserById.RemoveAsync("42");
-
-// Hash: bulk write + publish-all for cross-process invalidation
-await ctx.Users.WriteAsync(new Dictionary<string, UserProfile>
-{
-    ["1"] = new(1, "Bob"),
-    ["2"] = new(2, "Carol")
-}, forceToPublish: true); // publishes "Users|all" if channelName was set
-
-// Hash: multi-read
-var batch = ctx.Users.Read(new[] { "1", "2" });
 ```
 
 ---
@@ -153,7 +88,7 @@ var batch = ctx.Users.Read(new[] { "1", "2" });
   - Examples:
     - Prefix per environment: `name => $"Prod_{name}"`
     - Kebab-case: `name => Regex.Replace(name, "([a-z])([A-Z])", "$1-$2").ToLowerInvariant()`
-    - Tenant-scoped: `name => $"{tenantId}:{name}"`
+    - Tenant-scoped: `name => $"{tenantId}:{name}`
 - Publish channel: controlled by `channelName`
   - `RedisKey<T>` publish payload: `KeyName`
   - `RedisHashKey<T>` publish field: `HashName|{field}`
@@ -186,19 +121,28 @@ Note: Publishing is performed via the write multiplexer; subscribing can use the
 
 ---
 
+## Ctors and DI
+You can optionally define your own constructors in the derived context (e.g., to do extra wiring), but it is not required. The DI extension supports automatic initialization and will provide the connections and options. No manual Init calls are needed.
+
+Previously documented constructor overloads are still supported when present on your derived context:
+1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
+2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
+
+If you omit constructors, the base parameterless ctor is used and the context is initialized by the framework during activation.
+
+---
+
 ## Caching & Invalidation
-Enable or disable by `keepDataInMemory` in the constructor or DI extension.
 - `RedisKey<T>`: caches the last `RedisDataWrapper<T>` read or written
 - `RedisHashKey<T>`: caches individual field wrappers on-demand
 - `RedisPrefixedKeys<T>`: caches individual field wrappers on-demand
 
 Invalidation helpers:
 ```csharp
-ctx.AppVersion.ForceToReFetch();        // drop the simple key cache
-ctx.Users.ForceToReFetch("42");        // drop one field cache (hash)
-ctx.Users.ForceToReFetchAll();          // drop all cached fields for that hash
-ctx.Users.DoPublishAll();               // publish "Users|all"
-// For prefixed keys
+ctx.AppVersion.ForceToReFetch();
+ctx.Users.ForceToReFetch("42");
+ctx.Users.ForceToReFetchAll();
+ctx.Users.DoPublishAll();
 ctx.UserById.ForceToReFetch("42");
 ctx.UserById.ForceToReFetchAll();
 ctx.UserById.DoPublishAll();

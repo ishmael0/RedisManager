@@ -7,7 +7,7 @@ namespace Santel.Redis.TypedKeys
 {
     /// <summary>
     /// Represents a Redis Hash key wrapper that supports optional in-memory caching of deserialized values
-    /// and provides synchronous & asynchronous CRUD operations with batching and size limiting.
+    /// and provides synchronous and asynchronous CRUD operations with batching and size limiting.
     /// </summary>
     /// <typeparam name="T">Type of the value stored per hash field.</typeparam>
     public class RedisHashKey<T> : RedisCommonProperties<T>, IRedisCommonHashKeyMethods
@@ -20,8 +20,8 @@ namespace Santel.Redis.TypedKeys
         /// Initializes a new instance of <see cref="RedisHashKey{T}"/>.
         /// </summary>
         /// <param name="dbIndex">Target Redis database index.</param>
-        /// <param name="serialize">Optional custom value serializer (value -> string). When provided the payload is wrapped.</param>
-        /// <param name="deSerialize">Optional custom value deserializer (string -> value).</param>
+        /// <param name="serialize">Optional custom value serializer (value -&gt; string). When provided the payload is wrapped.</param>
+        /// <param name="deSerialize">Optional custom value deserializer (string -&gt; value).</param>
         public RedisHashKey(int dbIndex, Func<T, string>? serialize = null, Func<string, T>? deSerialize = null)
         {
             DbIndex = dbIndex;

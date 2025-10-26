@@ -79,55 +79,52 @@ namespace Santel.Redis.TypedKeys
             var hasChannel = !string.IsNullOrWhiteSpace(channelName);
             Channel = hasChannel ? new RedisChannel(channelName, RedisChannel.PatternMode.Literal) : default;
 
-            // Initialize RedisHashKey<T> properties
-            GetType().GetProperties().Where(c =>
-                    c.PropertyType.IsGenericType && c.PropertyType.GetGenericTypeDefinition() == typeof(RedisHashKey<>))
-                .Select(c => new { GType = c, Type = c.PropertyType.GetGenericArguments()[0], c.Name })
-                .ToList().ForEach(c =>
-                {
-                    var item = c.GType.GetValue(this) as IRedisCommonHashKeyMethods;
-                    if (item == null)
-                    {
-                        item = Activator.CreateInstance(typeof(RedisHashKey<>).MakeGenericType(c.Type), 1, null, null) as IRedisCommonHashKeyMethods;
-                        c.GType.SetValue(this, item);
-                    }
+            // Single pass over properties to initialize keys
+            var type = GetType();
+            foreach (var prop in type.GetProperties())
+            {
+                var pType = prop.PropertyType;
+                if (!pType.IsGenericType)
+                    continue;
 
-                    var fullKeyName = nameGeneratorStrategy != null ? nameGeneratorStrategy(c.Name) : c.Name;// string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}_{c.Name}";
+                var genDef = pType.GetGenericTypeDefinition();
+                var tArg = pType.GetGenericArguments()[0];
+                var fullKeyName = nameGeneratorStrategy != null ? nameGeneratorStrategy(prop.Name) : prop.Name;
+
+                if (genDef == typeof(RedisHashKey<>))
+                {
+                    var item = prop.GetValue(this) as IRedisCommonHashKeyMethods
+                               ?? Activator.CreateInstance(typeof(RedisHashKey<>).MakeGenericType(tArg), 1, null, null) as IRedisCommonHashKeyMethods;
+                    if (item == null) continue;
+                    prop.SetValue(this, item);
 
                     Action publishAll = hasChannel
-                        ? () => { Sub?.Publish(Channel, $"{c.Name}|all"); }
-                    : () => { };
+                        ? () => { Sub?.Publish(Channel, $"{prop.Name}|all"); }
+                        : () => { };
                     Action<string> publishField = hasChannel
-                        ? key => { Sub?.Publish(Channel, $"{c.Name}|{key}"); }
-                    : _ => { };
+                        ? key => { Sub?.Publish(Channel, $"{prop.Name}|{key}"); }
+                        : _ => { };
 
-                    item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
+                    item.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead,
                         publishAll,
                         publishField,
                         new RedisKey(fullKeyName), keepDataInMemory);
-                });
-
-            GetType().GetProperties().Where(c =>
-                    c.PropertyType.IsGenericType && c.PropertyType.GetGenericTypeDefinition() == typeof(RedisKey<>))
-                .Select(c => new { GType = c, Type = c.PropertyType.GetGenericArguments()[0], c.Name })
-                .ToList().ForEach(c =>
+                }
+                else if (genDef == typeof(RedisKey<>))
                 {
-                    var item = c.GType.GetValue(this) as IRedisCommonKeyMethods;
-                    if (item == null)
-                    {
-                        item = Activator.CreateInstance(typeof(RedisKey<>).MakeGenericType(c.Type), 1, null, null) as IRedisCommonKeyMethods;
-                        c.GType.SetValue(this, item);
-                    }
-                    var fullKeyName = nameGeneratorStrategy != null ? nameGeneratorStrategy(c.Name) : c.Name;
-
+                    var item = prop.GetValue(this) as IRedisCommonKeyMethods
+                               ?? Activator.CreateInstance(typeof(RedisKey<>).MakeGenericType(tArg), 1, null, null) as IRedisCommonKeyMethods;
+                    if (item == null) continue;
+                    prop.SetValue(this, item);
 
                     Action publish = hasChannel
-                        ? () => { Sub?.Publish(Channel, c.Name); }
-                    : () => { };
+                        ? () => { Sub?.Publish(Channel, prop.Name); }
+                        : () => { };
 
-                    item!.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead, publish,
+                    item.Init(Logger, connectionMultiplexerWrite, connectionMultiplexerRead, publish,
                         new RedisKey(fullKeyName), keepDataInMemory);
-                });
+                }
+            }
         }
 
 

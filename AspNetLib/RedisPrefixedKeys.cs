@@ -56,7 +56,6 @@ namespace Santel.Redis.TypedKeys
                 DbWriter = cnWriter.GetDatabase(DbIndex);
             FullName = fullName;
             KeepDataInMemory = keepDataInMemory;
-            _cnReader = cnReader;
         }
 
         private RedisKey Compose(string key) => (RedisKey)$"{FullName}:{key}";

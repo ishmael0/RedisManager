@@ -42,24 +42,24 @@ namespace Santel.Redis.TypedKeys
         /// <param name="connectionMultiplexerRead">Read connection.</param>
         /// <param name="keepDataInMemory">Enable in-memory caching of values.</param>
         /// <param name="logger">Logger instance.</param>
-        /// <param name="prefix">Environment/namespace prefix for key names. (If null/empty the property name is used directly)</param>
+        /// <param name="nameGeneratorStrategy"></param>
         /// <param name="channelName">Pub/Sub channel name. If null/empty no publish operations are performed.</param>
         public RedisDBContextModule(IConnectionMultiplexer connectionMultiplexerWrite,
             IConnectionMultiplexer connectionMultiplexerRead,
             bool keepDataInMemory,
             ILogger logger,
-            string? prefix = null,
+            Func<string, string>? nameGeneratorStrategy = null,
             string? channelName = null)
         {
-            Init(connectionMultiplexerWrite, connectionMultiplexerRead, keepDataInMemory, logger, prefix, channelName);
+            Init(connectionMultiplexerWrite, connectionMultiplexerRead, keepDataInMemory, logger, nameGeneratorStrategy, channelName);
         }
         public RedisDBContextModule(IConnectionMultiplexer connectionMultiplexer,
             bool keepDataInMemory,
             ILogger logger,
-            string? prefix = null,
+            Func<string, string>? nameGeneratorStrategy = null,
             string? channelName = null)
         {
-            Init(connectionMultiplexer, connectionMultiplexer, keepDataInMemory, logger, prefix, channelName);
+            Init(connectionMultiplexer, connectionMultiplexer, keepDataInMemory, logger, nameGeneratorStrategy, channelName);
         }
 
         private void Init(
@@ -67,7 +67,7 @@ namespace Santel.Redis.TypedKeys
             IConnectionMultiplexer connectionMultiplexerRead,
             bool keepDataInMemory,
             ILogger logger,
-            string? prefix = null,
+            Func<string, string>? nameGeneratorStrategy = null,
             string? channelName = null
             )
         {
@@ -93,7 +93,7 @@ namespace Santel.Redis.TypedKeys
                     }
 
                     // Key naming logic
-                    var fullKeyName = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}_{c.Name}";
+                    var fullKeyName = nameGeneratorStrategy != null ? nameGeneratorStrategy(c.Name) : c.Name;// string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}_{c.Name}";
 
                     // Publish delegates (no-ops if channel not provided)
                     Action publishAll = hasChannel
@@ -121,8 +121,8 @@ namespace Santel.Redis.TypedKeys
                         item = Activator.CreateInstance(typeof(RedisKey<>).MakeGenericType(c.Type), 1, null, null) as IRedisCommonKeyMethods;
                         c.GType.SetValue(this, item);
                     }
+                    var fullKeyName = nameGeneratorStrategy != null ? nameGeneratorStrategy(c.Name) : c.Name;
 
-                    var fullKeyName = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}_{c.Name}";
 
                     Action publish = hasChannel
                         ? () => { Sub?.Publish(Channel, c.Name); }

@@ -12,6 +12,7 @@ Typed, discoverable Redis keys for .NET 9. Focus on developer ergonomics: concis
 - Optional per-key/per-field in-memory cache with easy invalidation
 - Built-in lightweight pub/sub notifications for cross-process cache invalidation
 - Opt-in custom serialization per key
+- Pluggable key naming via `nameGeneratorStrategy` delegate
 - Helpers: hash paging, DB size, bulk write with chunking, soft safety limits
 
 ## Install
@@ -46,22 +47,22 @@ public class AppRedisContext : RedisDBContextModule
         serialize: inv => JsonConvert.SerializeObject(inv, Formatting.None),
         deSerialize: s => JsonConvert.DeserializeObject<Invoice>(s)!);
 
-    // Use separate read/write multiplexers (recommended for replicas), or the single-mux overload below.
+    // Separate read/write multiplexers (good with replicas)
     public AppRedisContext(IConnectionMultiplexer writer,
                            IConnectionMultiplexer reader,
                            ILogger<AppRedisContext> logger,
-                           string? prefix,
+                           Func<string, string>? nameGeneratorStrategy = null,
                            bool keepDataInMemory = true,
                            string? channelName = null)
-        : base(writer, reader, keepDataInMemory, logger, prefix, channelName) { }
+        : base(writer, reader, keepDataInMemory, logger, nameGeneratorStrategy, channelName) { }
 
     // Single-multiplexer overload (read = write)
     public AppRedisContext(IConnectionMultiplexer mux,
                            ILogger<AppRedisContext> logger,
-                           string? prefix,
+                           Func<string, string>? nameGeneratorStrategy = null,
                            bool keepDataInMemory = true,
                            string? channelName = null)
-        : base(mux, keepDataInMemory, logger, prefix, channelName) { }
+        : base(mux, keepDataInMemory, logger, nameGeneratorStrategy, channelName) { }
 }
 
 public record UserProfile(int Id, string Name)
@@ -86,7 +87,7 @@ services.AddLogging();
 // It will try the single-multiplexer ctor first, then the dual-mux ctor.
 services.AddRedisDBContext<AppRedisContext>(
     keepDataInMemory: true,
-    prefix: "Prod",
+    nameGeneratorStrategy: name => $"Prod_{name}",
     channelName: "Prod");
 ```
 
@@ -117,7 +118,12 @@ var batch = ctx.Users.Read(new[] { "1", "2" });
 ---
 
 ## Key Naming & Pub/Sub
-- Naming: if `prefix` is null/empty → `PropertyName`; else → `${prefix}_{PropertyName}`
+- Naming: by default, key name = `PropertyName`.
+- If you supply `nameGeneratorStrategy`, it receives `PropertyName` and returns the final Redis key name.
+  - Examples:
+    - Prefix per environment: `name => $"Prod_{name}"`
+    - Kebab-case: `name => Regex.Replace(name, "([a-z])([A-Z])", "$1-$2").ToLowerInvariant()`
+    - Tenant-scoped: `name => $"{tenantId}:{name}"`
 - Publish channel: controlled by `channelName`
   - `RedisKey<T>` publish payload: `KeyName`
   - `RedisHashKey<T>` publish field: `HashName|{field}`
@@ -231,12 +237,12 @@ A generic DI extension is provided:
 ```csharp
 services.AddRedisDBContext<AppRedisContext>(
     keepDataInMemory: true,
-    prefix: "Prod",          // becomes key prefix: Prod_{Property}
-    channelName: "Prod");    // pub/sub channel name (omit/empty to disable publishing)
+    nameGeneratorStrategy: name => $"Prod_{name}",  // becomes final Redis key (e.g., Prod_Users)
+    channelName: "Prod");                            // pub/sub channel name (omit/empty to disable publishing)
 ```
 The factory tries these constructors in order:
-1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, string? prefix, string? channelName)`
-2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, string? prefix, string? channelName)`
+1) `(IConnectionMultiplexer mux, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
+2) `(IConnectionMultiplexer write, IConnectionMultiplexer read, bool keepDataInMemory, ILogger logger, Func<string,string>? nameGeneratorStrategy, string? channelName)`
 
 You can still register manually if you need custom wiring.
 

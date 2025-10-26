@@ -6,7 +6,7 @@ namespace Santel.Redis.TypedKeys
 {
     public static class RedisDBContextModuleHandler
     {
-        public static void AddRedisDBContext<T>(this IServiceCollection services, bool keepDataInMemory, string? prefix = null,
+        public static void AddRedisDBContext<T>(this IServiceCollection services, bool keepDataInMemory, Func<string, string>? nameGeneratorStrategy = null,
             string? channelName = null)
             where T : RedisDBContextModule
         {
@@ -17,12 +17,12 @@ namespace Santel.Redis.TypedKeys
                 // Try single-multiplexer constructor first: (IConnectionMultiplexer, bool, ILogger, string?, string?)
                 try
                 {
-                    return ActivatorUtilities.CreateInstance<T>(sp, mux, keepDataInMemory, prefix, channelName);
+                    return ActivatorUtilities.CreateInstance<T>(sp, mux, keepDataInMemory, nameGeneratorStrategy, channelName);
                 }
                 catch
                 {
                     // Fallback to dual-multiplexer constructor: (IConnectionMultiplexer, IConnectionMultiplexer, bool, ILogger, string?, string?)
-                    return ActivatorUtilities.CreateInstance<T>(sp, mux, mux, keepDataInMemory, prefix, channelName);
+                    return ActivatorUtilities.CreateInstance<T>(sp, mux, mux, keepDataInMemory, nameGeneratorStrategy, channelName);
                 }
             });
         }

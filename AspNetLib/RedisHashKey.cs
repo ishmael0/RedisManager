@@ -7,11 +7,11 @@ namespace Santel.Redis.TypedKeys
 {
     public class RedisHashKey<T> : RedisCommonProperties<T>, IRedisHashKey
     {
-        private readonly ConcurrentDictionary<string, RedisDataWrapper<T>> _data;
+        private readonly ConcurrentDictionary<string, RedisDataWrapper<T>> _data = new();
+
         public RedisHashKey(int dbIndex, Func<T, string>? serialize = null, Func<string, T>? deSerialize = null)
         {
             DbIndex = dbIndex;
-            _data = new ConcurrentDictionary<string, RedisDataWrapper<T>>();
             Serialize = (d) => JsonConvert.SerializeObject(serialize == null ? new RedisDataWrapper<T>(d) : new RedisDataWrapper<string>(serialize(d)));
             DeSerialize = (str) =>
             {
@@ -29,6 +29,7 @@ namespace Santel.Redis.TypedKeys
                 return null;
             };
         }
+
         public void Init(RedisDBContextModuleConfigs contexConfig, RedisKey fullName)
         {
             ContextConfig = contexConfig;
@@ -36,6 +37,7 @@ namespace Santel.Redis.TypedKeys
             Reader = ContextConfig.Reader.GetDatabase(DbIndex);
             Writer = ContextConfig.Writer.GetDatabase(DbIndex);
         }
+
         public long GetSize()
         {
             var keyMemoryUsage = Reader.Execute("MEMORY", "USAGE", FullName);
@@ -44,91 +46,18 @@ namespace Santel.Redis.TypedKeys
 
         public RedisValue[] GetAllKeys()
         {
-            var x = Reader.HashKeys(FullName);
-            return x;
+            return Reader.HashKeys(FullName);
         }
-        /// <summary>
-        /// Asynchronously returns all field names in the hash.
-        /// </summary>
+
         public async Task<RedisValue[]> GetAllKeysAsync()
         {
             return await Reader.HashKeysAsync(FullName);
         }
-        /// <summary>
-        /// Sets a special meta field ("____last") with a timestamp value.
-        /// </summary>
-        /// <param name="s">Timestamp to store.</param>
-        public void SetLast(DateTime s)
-        {
-            Writer.HashSet(FullName, "____last", s.ToString());
-        }
-        /// <summary>
-        /// Reads a group of keys optionally in chunks. When caching is enabled only missing keys trigger Redis calls.
-        /// </summary>
-        /// <param name="keys">Field names to fetch.</param>
-        /// <param name="force">If true forces re-fetch even if cached.</param>
-        /// <param name="chunkSize">Number of keys per HashGet batch.</param>
-        /// <returns>Dictionary of key/value pairs or null on failure.</returns>
-        public Dictionary<string, T>? Read(IEnumerable<string> keys, bool force = false, int chunkSize = 10)
-        {
-            try
-            {
-                var result = new Dictionary<string, T>();
-                List<string[]> query;
-                if (force)
-                    query = keys.Chunk(chunkSize).ToList();
-                else
-                    query = keys.Where(c => !_data.ContainsKey(c)).Chunk(chunkSize).ToList();
 
-                query.ForEach(e =>
-                {
-                    var tempArray = Reader.HashGet(FullName, e.Select(key => (RedisValue)key).ToArray());
-                    for (var i = 0; i < tempArray.Length; i++)
-                        if (!string.IsNullOrEmpty(tempArray[i]))
-                        {
-                            var d = DeSerialize(tempArray[i]!);
-                            if (d != null)
-                            {
-                                if (ContextConfig.KeepDataInMemory)
-                                    _data.TryAdd(e[i], d);
-                                else
-                                    result[e[i]] = d.Data;
-                            }
-                        }
-                });
-                if (ContextConfig.KeepDataInMemory)
-                    return _data.Where(kv => keys.Contains(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value.Data);
-                else return result;
-            }
-            catch (Exception e)
-            {
-                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}");
-            }
-
-            return default;
-        }
-        /// <summary>
-        /// Reads a single field value.
-        /// </summary>
-        /// <param name="key">Field name.</param>
-        /// <param name="force">If true ignores cached entry.</param>
-        /// <returns>The value or default if not found.</returns>
         public T? Read(string key, bool force = false)
         {
-            var d = ReadFull(key, force);
-            if (d == null) return default;
-            return d.Data;
-        }
-        /// <summary>
-        /// Reads a single field returning the wrapper metadata (timestamp etc.).
-        /// </summary>
-        /// <param name="key">Field name.</param>
-        /// <param name="force">If true forces a Redis read even if cached.</param>
-        /// <returns>Wrapper with data and metadata or null.</returns>
-        public RedisDataWrapper<T>? ReadFull(string key, bool force = false)
-        {
-            if (!force && _data.ContainsKey(key))
-                return _data[key];
+            if (!force && _data.TryGetValue(key, out var cached))
+                return cached.Data;
             try
             {
                 var temp = Reader.HashGet(FullName, key).ToString();
@@ -138,36 +67,7 @@ namespace Santel.Redis.TypedKeys
                 if (data != null)
                 {
                     if (ContextConfig.KeepDataInMemory)
-                        _data.TryAdd(key, data);
-                    return data;
-                }
-            }
-            catch (Exception e)
-            {
-                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}>{key}");
-            }
-            return default;
-        }
-        /// <summary>
-        /// Asynchronously reads a single field value.
-        /// </summary>
-        /// <param name="key">Field name.</param>
-        /// <param name="force">If true re-fetches from Redis.</param>
-        /// <returns>Value or default.</returns>
-        public async Task<T?> ReadAsync(string key, bool force = false)
-        {
-            if (!force && _data.ContainsKey(key))
-                return _data[key].Data;
-            try
-            {
-                var temp = (await Reader.HashGetAsync(FullName, key)).ToString();
-                if (string.IsNullOrEmpty(temp))
-                    return default;
-                var data = DeSerialize(temp);
-                if (data != null)
-                {
-                    if (ContextConfig.KeepDataInMemory)
-                        _data.TryAdd(key, data);
+                        _data[key] = data;
                     return data.Data;
                 }
             }
@@ -177,108 +77,181 @@ namespace Santel.Redis.TypedKeys
             }
             return default;
         }
-        /// <summary>
-        /// Asynchronously reads a batch of fields (with optional caching and chunking).
-        /// Always returns a dictionary (possibly empty) unless a fatal error occurs.
-        /// </summary>
-        /// <param name="keys">List of field names.</param>
-        /// <param name="force">If true re-reads all keys from Redis.</param>
-        /// <param name="chunkSize">Max fields per batch HashGet.</param>
-        /// <returns>Dictionary with available values.</returns>
-        public async Task<Dictionary<string, T>?> ReadAsync(List<string> keys, bool force = false, int chunkSize = 5)
+
+        public Dictionary<string, T>? Read(IEnumerable<string> keys, bool force = false)
         {
             var result = new Dictionary<string, T>();
             try
             {
-                List<string[]> query;
+                var toFetch = force ? keys.ToArray() : keys.Where(k => !_data.ContainsKey(k)).ToArray();
 
-                if (force)
-                    query = keys.Chunk(chunkSize).ToList();
-                else
+                if (toFetch.Length > 0)
                 {
-                    query = keys.Where(c => !_data.ContainsKey(c)).Chunk(chunkSize).ToList();
-                    foreach (var cached in keys.Where(c => _data.ContainsKey(c)))
-                        result[cached] = _data[cached].Data;
+                    var values = Reader.HashGet(FullName, toFetch.Select(key => (RedisValue)key).ToArray());
+                    for (var i = 0; i < toFetch.Length; i++)
+                    {
+                        if (!values[i].IsNullOrEmpty)
+                        {
+                            var d = DeSerialize(values[i].ToString());
+                            if (d != null)
+                            {
+                                if (ContextConfig.KeepDataInMemory)
+                                    _data[toFetch[i]] = d;
+                                result[toFetch[i]] = d.Data;
+                            }
+                        }
+                    }
                 }
 
-                foreach (var item in query)
-                    try
-                    {
-                        var tempArray = await Reader.HashGetAsync(FullName, item.Select(key => (RedisValue)key).ToArray());
-                        for (var i = 0; i < tempArray.Length; i++)
-                            if (!string.IsNullOrEmpty(tempArray[i]))
-                            {
-                                var d = DeSerialize(tempArray[i]!);
-                                if (d != null)
-                                {
-                                    if (ContextConfig.KeepDataInMemory)
-                                        _data[item[i]] = d;
-                                    result[item[i]] = d.Data; // Always populate result for consistency
-                                }
-                            }
-                    }
-                    catch (Exception e)
-                    {
-                        ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}", e);
-                    }
                 if (ContextConfig.KeepDataInMemory)
                 {
-                    // Ensure all requested keys are present if cached
                     foreach (var k in keys)
-                        if (_data.TryGetValue(k, out var wrapper) && !result.ContainsKey(k))
-                            result[k] = wrapper.Data;
+                        if (_data.TryGetValue(k, out var w) && !result.ContainsKey(k))
+                            result[k] = w.Data;
                 }
+
                 return result;
             }
             catch (Exception e)
             {
                 ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}");
+                return default;
             }
+        }
 
-            return result;
-        }
-        /// <summary>
-        /// Removes a single field from the hash asynchronously.
-        /// </summary>
-        /// <param name="key">Field name.</param>
-        /// <returns>True if request queued; false on invalid input.</returns>
-        public async Task<bool> RemoveAsync(string key)
+        public Dictionary<string, T>? ReadInChunks(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)
         {
-            if (string.IsNullOrEmpty(key))
-                return false;
-            await Writer.HashDeleteAsync(FullName, key);
-            return true;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            var result = new Dictionary<string, T>();
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var chunkResult = Read(chunk, force);
+                    if (chunkResult != null)
+                    {
+                        foreach (var kv in chunkResult)
+                        {
+                            result[kv.Key] = kv.Value;
+                        }
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading chunks {FullName}");
+                return default;
+            }
         }
-        /// <summary>
-        /// Removes multiple fields in one operation.
-        /// </summary>
-        /// <param name="keys">Field names.</param>
-        public async Task<bool> RemoveAsync(RedisValue[] keys)
+
+        public async Task<T?> ReadAsync(string key, bool force = false)
         {
-            await Writer.HashDeleteAsync(FullName, keys);
-            return true;
+            if (!force && _data.TryGetValue(key, out var cached))
+                return cached.Data;
+            try
+            {
+                var temp = (await Reader.HashGetAsync(FullName, key)).ToString();
+                if (string.IsNullOrEmpty(temp))
+                    return default;
+                var data = DeSerialize(temp);
+                if (data != null)
+                {
+                    if (ContextConfig.KeepDataInMemory)
+                        _data[key] = data;
+                    return data.Data;
+                }
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}>{key}");
+            }
+            return default;
         }
-        /// <summary>
-        /// Deletes the entire hash key.
-        /// </summary>
-        public async Task<bool> RemoveAsync()
+
+        public async Task<Dictionary<string, T>?> ReadAsync(IEnumerable<string> keys, bool force = false)
         {
-            await Writer.KeyDeleteAsync(FullName);
-            return true;
+            var result = new Dictionary<string, T>();
+            try
+            {
+                var toFetch = force ? keys.ToArray() : keys.Where(k => !_data.ContainsKey(k)).ToArray();
+
+                if (toFetch.Length > 0)
+                {
+                    var values = await Reader.HashGetAsync(FullName, toFetch.Select(key => (RedisValue)key).ToArray());
+                    for (var i = 0; i < toFetch.Length; i++)
+                    {
+                        if (!values[i].IsNullOrEmpty)
+                        {
+                            var d = DeSerialize(values[i].ToString());
+                            if (d != null)
+                            {
+                                if (ContextConfig.KeepDataInMemory)
+                                    _data[toFetch[i]] = d;
+                                result[toFetch[i]] = d.Data;
+                            }
+                        }
+                    }
+                }
+
+                if (ContextConfig.KeepDataInMemory)
+                {
+                    foreach (var k in keys)
+                        if (_data.TryGetValue(k, out var w) && !result.ContainsKey(k))
+                            result[k] = w.Data;
+                }
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}");
+                return default;
+            }
         }
-        /// <summary>
-        /// Writes or overwrites a single field value.
-        /// </summary>
-        /// <param name="key">Field name.</param>
-        /// <param name="d">Value.</param>
-        /// <returns>True if field was set.</returns>
+
+        public async Task<Dictionary<string, T>?> ReadInChunksAsync(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)
+        {
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            var result = new Dictionary<string, T>();
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var chunkResult = await ReadAsync(chunk, force);
+                    if (chunkResult != null)
+                    {
+                        foreach (var kv in chunkResult)
+                        {
+                            result[kv.Key] = kv.Value;
+                        }
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading chunks {FullName}");
+                return default;
+            }
+        }
+
         public bool Write(string key, T d)
         {
-            if (string.IsNullOrEmpty(key) || d == null) return false;
+            if (string.IsNullOrEmpty(key) || d == null)
+                return false;
             try
             {
                 var res = Writer.HashSet(FullName, key, Serialize(d));
-                ContextConfig.PublishByKey(this, key);
+                if (ContextConfig.KeepDataInMemory)
+                    _data[key] = new RedisDataWrapper<T>(d);
+                ContextConfig.Publish(this, key);
                 return res;
             }
             catch (Exception e)
@@ -286,22 +259,21 @@ namespace Santel.Redis.TypedKeys
                 ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}>{key}");
                 return false;
             }
-
         }
-        /// <summary>
-        /// Bulk writes entries (no chunking). Fails if new total would exceed the limit.
-        /// </summary>
-        /// <param name="data">Entries to write.</param>
-        /// <param name="forceToPublish">If true triggers a publish-all callback.</param>
-        public bool Write(IDictionary<string, T> data, bool forceToPublish = false)
+
+        public bool Write(IDictionary<string, T> data)
         {
             if (data == null || data.Count == 0)
                 return false;
             try
             {
                 Writer.HashSet(FullName, data.Select(c => new HashEntry(c.Key, Serialize(c.Value))).ToArray());
-                if (forceToPublish)
-                    ContextConfig.Publish(this);
+                if (ContextConfig.KeepDataInMemory)
+                {
+                    foreach (var kv in data)
+                        _data[kv.Key] = new RedisDataWrapper<T>(kv.Value);
+                }
+                ContextConfig.Publish(this, data.Keys);
                 return true;
             }
             catch (Exception e)
@@ -311,26 +283,41 @@ namespace Santel.Redis.TypedKeys
             }
         }
 
-        /// <summary>
-        /// Invokes the publish-all callback manually.
-        /// </summary>
-        public void DoPublishAll()
+        public bool WriteInChunks(IDictionary<string, T> data, int chunkSize = 1000)
         {
-            ContextConfig.Publish(this);
+            if (data == null || data.Count == 0)
+                return false;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            try
+            {
+                foreach (var chunk in data.Chunk(chunkSize))
+                {
+                    var chunkDict = chunk.ToDictionary(kv => kv.Key, kv => kv.Value);
+                    var success = Write(chunkDict);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in writing chunks {FullName}");
+                return false;
+            }
         }
-        /// <summary>
-        /// Asynchronously writes a single field value.
-        /// </summary>
-        /// <param name="key">Field name.</param>
-        /// <param name="d">Value.</param>
-        /// <returns>True if set successfully.</returns>
+
         public async Task<bool> WriteAsync(string key, T d)
         {
-            if (string.IsNullOrEmpty(key) || d == null) return false;
+            if (string.IsNullOrEmpty(key) || d == null)
+                return false;
             try
             {
                 var res = await Writer.HashSetAsync(FullName, key, Serialize(d));
-                ContextConfig.PublishByKey(this, key);
+                if (ContextConfig.KeepDataInMemory)
+                    _data[key] = new RedisDataWrapper<T>(d);
+                ContextConfig.Publish(this, key);
                 return res;
             }
             catch (Exception e)
@@ -339,19 +326,20 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        public async Task<bool> WriteAsync(IDictionary<string, T> data, bool forceToPublish = false)
+
+        public async Task<bool> WriteAsync(IDictionary<string, T> data)
         {
             if (data == null || data.Count == 0)
                 return false;
             try
             {
-                foreach (var chunk in data)
+                await Writer.HashSetAsync(FullName, data.Select(c => new HashEntry(c.Key, Serialize(c.Value))).ToArray());
+                if (ContextConfig.KeepDataInMemory)
                 {
-                    await Writer.HashSetAsync(FullName, chunk.Key, Serialize(chunk.Value));
+                    foreach (var kv in data)
+                        _data[kv.Key] = new RedisDataWrapper<T>(kv.Value);
                 }
-
-                if (forceToPublish)
-                    ContextConfig.Publish(this);
+                ContextConfig.Publish(this, data.Keys);
                 return true;
             }
             catch (Exception e)
@@ -360,33 +348,146 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
+
+        public async Task<bool> WriteInChunksAsync(IDictionary<string, T> data, int chunkSize = 1000)
+        {
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            if (data == null || data.Count == 0)
+                return false;
+
+            try
+            {
+                foreach (var chunk in data.Chunk(chunkSize))
+                {
+                    var chunkDict = chunk.ToDictionary(kv => kv.Key, kv => kv.Value);
+                    var success = await WriteAsync(chunkDict);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in writing chunks {FullName}");
+                return false;
+            }
+        }
+
+        public bool Remove(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return false;
+            Writer.HashDelete(FullName, key);
+            _data.TryRemove(key, out _);
+            return true;
+        }
+
+        public bool Remove(IEnumerable<string> keys)
+        {
+            var arr = keys?.Select(k => (RedisValue)k).ToArray();
+            if (arr == null || arr.Length == 0)
+                return false;
+            Writer.HashDelete(FullName, arr);
+            foreach (var k in arr)
+                _data.TryRemove(k, out _);
+            return true;
+        }
+
+        public bool RemoveInChunks(IEnumerable<string> keys, int chunkSize = 1000)
+        {
+            if (keys == null)
+                return false;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var success = Remove(chunk);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in removing chunks {FullName}");
+                return false;
+            }
+        }
+
+        public async Task<bool> RemoveAsync(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return false;
+            await Writer.HashDeleteAsync(FullName, key);
+            _data.TryRemove(key, out _);
+            return true;
+        }
+
+        public async Task<bool> RemoveAsync(IEnumerable<string> keys)
+        {
+            var arr = keys?.Select(k => (RedisValue)k).ToArray();
+            if (arr == null || arr.Length == 0)
+                return false;
+            await Writer.HashDeleteAsync(FullName, arr);
+            foreach (var k in arr)
+                _data.TryRemove(k, out _);
+            return true;
+        }
+
+        public async Task<bool> RemoveInChunksAsync(IEnumerable<string> keys, int chunkSize = 1000)
+        {
+            if (keys == null)
+                return false;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var success = await RemoveAsync(chunk);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in removing chunks {FullName}");
+                return false;
+            }
+        }
+
         public void InvalidateCache(string key)
         {
             if (_data != null && _data.ContainsKey(key))
                 _data.TryRemove(key, out _);
         }
+
+        public void InvalidateCache(IEnumerable<string> keys)
+        {
+            if (_data != null)
+            {
+                foreach (var key in keys)
+                {
+                    _data.TryRemove(key, out _);
+                }
+            }
+        }
+
         public void InvalidateCache()
         {
             _data.Clear();
         }
+
         public T? this[string key]
         {
             get => Read(key);
-        }
-
-        /// <summary>
-        /// Concurrency test helper that triggers cache clearing while multiple reads occur.
-        /// </summary>
-        /// <param name="v">Hash key instance.</param>
-        public static async Task TestConcurrency_IN_ForceToReFetchAll(RedisHashKey<int> v)
-        {
-            await v.WriteAsync(Enumerable.Range(1, 10000).ToDictionary(c => c.ToString(), c => c));
-            var tasks = new List<Task>();
-            var keys = v.GetAllKeys().Select(c => (string)c!).ToList();
-            tasks.Add(Task.Run(() => v.InvalidateCache()));
-            foreach (var key in keys)
-                tasks.Add(Task.Run(() => v.ReadAsync(key)));
-            await Task.WhenAll(tasks);
         }
     }
 }

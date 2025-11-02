@@ -237,7 +237,7 @@ namespace Santel.Redis.TypedKeys
                 var res = Writer.StringSet(Compose(key), Serialize(d));
                 if (ContextConfig.KeepDataInMemory)
                     _data[key] = new RedisDataWrapper<T>(d);
-                ContextConfig.PublishByKey(this, key);
+                ContextConfig.Publish(this, key);
                 return res;
             }
             catch (Exception e)
@@ -324,7 +324,7 @@ namespace Santel.Redis.TypedKeys
                 var res = await Writer.StringSetAsync(Compose(key), Serialize(d));
                 if (ContextConfig.KeepDataInMemory)
                     _data[key] = new RedisDataWrapper<T>(d);
-                ContextConfig.PublishByKey(this, key);
+                ContextConfig.Publish(this, key);
                 return res;
             }
             catch (Exception e)
@@ -356,9 +356,6 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-
-
-
 
         public bool Remove(string key)
         {

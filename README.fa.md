@@ -16,6 +16,9 @@
 - pub/sub سبک برای invalidation بین چند پروسه
 - امکان serialization سفارشی برای هر key
 - naming قابل‌سفارشی‌سازی از طریق `nameGeneratorStrategy`
+- **جدید**: عملیات‌های تکه‌ای (chunked) برای دیتاست‌های بزرگ (`ReadInChunks`, `WriteInChunks`, `RemoveInChunks`)
+- **جدید**: ردیابی مصرف حافظه با متد `GetSize()` برای همه‌ی انواع key
+- **جدید**: متدهای پیشرفته‌تر برای پاک‌سازی cache (تک، چندتایی، کامل)
 - ابزارهای آماده: paging برای hash، گرفتن DB size، bulk write با chunk کردن، و چند محدودیت نرم برای ایمنی
 
 ## نصب
@@ -117,21 +120,38 @@ var ctx = sp.GetRequiredService<AppRedisContext>();
 ctx.AppVersion.Write("1.5.0");
 string? version = ctx.AppVersion.Read();
 
-ctx.Users.Write("42", new UserProfile(42, "Alice"));
+ctx.Users.Write("42", new UserProfile(42, "Alice", "alice@example.com"));
 var alice = ctx.Users.Read("42");
 
+// دسترسی از طریق indexer
+var bob = ctx.Users["42"];
+
 // Prefixed: ذخیره به شکل "UserById:42"
-await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
+await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice", "alice@example.com"));
 var u = await ctx.UserById.ReadAsync("42");
 await ctx.UserById.RemoveAsync("42");
 
+// نوشتن چندتایی
 await ctx.Users.WriteAsync(new Dictionary<string, UserProfile>
 {
-    ["1"] = new(1, "Bob"),
-    ["2"] = new(2, "Carol")
-}, forceToPublish: true); // "Users|all" اگر channelName ست باشد منتشر می‌شود
+    ["1"] = new(1, "Bob", "bob@example.com"),
+    ["2"] = new(2, "Carol", "carol@example.com")
+});
 
+// خواندن چندتایی
 var batch = ctx.Users.Read(new[] { "1", "2" });
+
+// عملیات تکه‌ای برای دیتاست بزرگ (10000 رکورد)
+var manyUsers = new Dictionary<string, UserProfile>();
+for (int i = 0; i < 10000; i++)
+    manyUsers[$"{i}"] = new UserProfile(i, $"User{i}", $"user{i}@example.com");
+
+await ctx.Users.WriteInChunksAsync(manyUsers, chunkSize: 500);
+Console.WriteLine("10000 کاربر در تکه‌های 500 تایی نوشته شد");
+
+// بررسی مصرف حافظه
+var size = ctx.Users.GetSize();
+Console.WriteLine($"حجم Users در Redis: {size} بایت");
 ```
 
 ---
@@ -181,16 +201,25 @@ await sub.SubscribeAsync("Prod", (ch, msg) =>
 - `RedisHashKey<T>`: هر field جداگانه cache میشه
 - `RedisPrefixedKeys<T>`: هر field جداگانه cache میشه
 
-ابزار invalidate:
+متدهای invalidate:
 ```csharp
-ctx.AppVersion.ForceToReFetch();        // کش key ساده را خالی کن
-ctx.Users.ForceToReFetch("42");        // یک field از hash
-ctx.Users.ForceToReFetchAll();          // همهٔ fieldهای hash
-ctx.Users.DoPublishAll();               // "Users|all" را publish کن
-// برای prefixed
-ctx.UserById.ForceToReFetch("42");
-ctx.UserById.ForceToReFetchAll();
-ctx.UserById.DoPublishAll();
+// RedisKey<T>
+ctx.AppVersion.InvalidateCache();          // پاک‌سازی cache برای key
+
+// RedisHashKey<T>
+ctx.Users.InvalidateCache("42");           // پاک‌سازی cache یک field
+ctx.Users.InvalidateCache(new[] {"1","2"}); // پاک‌سازی چند field
+ctx.Users.InvalidateCache();                // پاک‌سازی کل cache
+
+// RedisPrefixedKeys<T>
+ctx.UserById.InvalidateCache("42");
+ctx.UserById.InvalidateCache(new[] {"1","2"});
+ctx.UserById.InvalidateCache();
+
+// متدهای قدیمی (هنوز پشتیبانی می‌شن)
+ctx.AppVersion.ForceToReFetch();
+ctx.Users.ForceToReFetch("42");
+ctx.Users.ForceToReFetchAll();
 ```
 
 ---
@@ -200,37 +229,118 @@ ctx.UserById.DoPublishAll();
 RedisKey<T>
 - تعریف: `public RedisKey<T> SomeKey { get; set; } = new(dbIndex);`
 - نوشتن: `Write(T value)` / `Task WriteAsync(T value)`
-- خوندن: `T? Read()` / `Task<T?> ReadAsync()`
+- خوندن: `T? Read(bool force = false)` / `Task<T?> ReadAsync(bool force = false)`
 - خوندن wrapper کامل: `RedisDataWrapper<T>? ReadFull()`
 - وجود: `bool Exists()`
 - حذف: `bool Remove()` / `Task<bool> RemoveAsync()`
-- cache: `ForceToReFetch()`
+- **حجم حافظه**: `long GetSize()` - برمی‌گردونه حجم مصرفی به بایت
+- cache: `InvalidateCache()` / `ForceToReFetch()`
 
 RedisHashKey<T>
 - تعریف: `public RedisHashKey<T> SomeHash { get; set; } = new(dbIndex, serialize?, deSerialize?);`
-- نوشتن field: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
-- نوشتن bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false, int maxChunkSizeInBytes = 1024*128)`
-- خوندن field: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
-- خوندن چند field: `IDictionary<string,T> Read(IEnumerable<string> fields)`
-- حذف: `Task<bool> RemoveAsync(string field)` / حذف چند field
+- نوشتن field: `Write(string field, T value)` / `Task<bool> WriteAsync(string field, T value)`
+- نوشتن bulk: `Write(IDictionary<string,T> data)` / `Task<bool> WriteAsync(IDictionary<string,T> data)`
+- **نوشتن تکه‌ای**: `WriteInChunks(IDictionary<string,T> data, int chunkSize = 1000)` / `Task<bool> WriteInChunksAsync(...)`
+- خوندن field: `T? Read(string field, bool force = false)` / `Task<T?> ReadAsync(string field, bool force = false)`
+- خوندن چند field: `Dictionary<string,T>? Read(IEnumerable<string> fields, bool force = false)` / نسخه async
+- **خوندن تکه‌ای**: `ReadInChunks(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)` / نسخه async
+- **گرفتن همه keyها**: `RedisValue[] GetAllKeys()` / `Task<RedisValue[]> GetAllKeysAsync()`
+- حذف: `Remove(string key)` / `RemoveAsync(string key)` / حذف چند field
+- **حذف تکه‌ای**: `RemoveInChunks(IEnumerable<string> keys, int chunkSize = 1000)` / نسخه async
 - حذف کل hash: `Task<bool> RemoveAsync()`
-- cache: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
-- publish-all: `DoPublishAll()`
+- **حجم حافظه**: `long GetSize()` - برمی‌گردونه حجم hash به بایت
+- **cache**: `InvalidateCache(string key)` / `InvalidateCache(IEnumerable<string> keys)` / `InvalidateCache()`
+- **Indexer**: `T? this[string key]` - خوندن با سینتکس indexer
 
 RedisPrefixedKeys<T>
 - تعریف: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);`
-- نوشتن: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
-- نوشتن bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false)`
-- خوندن: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
-- خوندن چند field: `IDictionary<string,T> Read(IEnumerable<string> fields)`
-- حذف: `Task<bool> RemoveAsync(string field)` / چندتایی
-- cache: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
-- publish-all: `DoPublishAll()`
+- نوشتن: `Write(string field, T value)` / `Task<bool> WriteAsync(string field, T value)`
+- نوشتن bulk: `Write(IDictionary<string,T> data)` / `Task<bool> WriteAsync(IDictionary<string,T> data)`
+- **نوشتن تکه‌ای**: `WriteInChunks(IDictionary<string,T> data, int chunkSize = 1000)` / نسخه async
+- خوندن: `T? Read(string field, bool force = false)` / `Task<T?> ReadAsync(string field, bool force = false)`
+- خوندن چند field: `Dictionary<string,T>? Read(IEnumerable<string> fields, bool force = false)` / نسخه async
+- **خوندن تکه‌ای**: `ReadInChunks(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)` / نسخه async
+- حذف: `Remove(string key)` / `RemoveAsync(string key)` / چندتایی
+- **حذف تکه‌ای**: `RemoveInChunks(IEnumerable<string> keys, int chunkSize = 1000)` / نسخه async
+- **حجم حافظه**: `long GetSize()` - مجموع حجم همه keyهای prefixed به بایت (از SCAN استفاده می‌کنه)
+- **cache**: `InvalidateCache(string key)` / `InvalidateCache(IEnumerable<string> keys)` / `InvalidateCache()`
 
 ابزارهای context
 - `Task<long> GetDbSize(int database)`
 - `Task<(List<string>? Keys, long Total)> GetHashKeysByPage(int database, string hashKey, int pageNumber = 1, int pageSize = 10)`
 - `Task<string?> GetValues(int database, string key)`
+
+---
+
+## عملیات تکه‌ای (Chunked Operations) - جدید
+برای کار با دیتاست‌های بزرگ، از متدهای تکه‌ای استفاده کن تا Redis بلاک نشه و timeout نگیری:
+
+### نوشتن به شکل تکه‌ای
+```csharp
+var manyUsers = new Dictionary<string, UserProfile>();
+for (int i = 0; i < 10000; i++)
+    manyUsers[$"{i}"] = new UserProfile(i, $"User{i}", $"user{i}@example.com");
+
+// Hash: نوشتن در تکه‌های 500 تایی
+await ctx.Users.WriteInChunksAsync(manyUsers, chunkSize: 500);
+
+// Prefixed keys: نوشتن در تکه‌های 500 تایی
+await ctx.UserSettings.WriteInChunksAsync(manyUsers, chunkSize: 500);
+```
+
+### خوندن به شکل تکه‌ای
+```csharp
+var userIds = Enumerable.Range(0, 10000).Select(i => i.ToString()).ToList();
+
+// خوندن 10000 کاربر در تکه‌های 500 تایی
+var users = await ctx.Users.ReadInChunksAsync(userIds, chunkSize: 500);
+Console.WriteLine($"{users?.Count} کاربر لود شد");
+```
+
+### حذف به شکل تکه‌ای
+```csharp
+var idsToRemove = Enumerable.Range(0, 10000).Select(i => i.ToString());
+
+// حذف در تکه‌های 500 تایی
+await ctx.Users.RemoveInChunksAsync(idsToRemove, chunkSize: 500);
+```
+
+**مزایا:**
+- Redis بلاک نمیشه روی عملیات‌های بزرگ
+- فشار کمتری روی حافظه
+- timeout نمی‌گیره
+- برای production و دیتاست‌های هزاران آیتمی امنه
+
+---
+
+## ردیابی مصرف حافظه (Memory Usage) - جدید
+حجم مصرفی Redis رو برای مانیتورینگ و بهینه‌سازی ردیابی کن:
+
+```csharp
+// حجم یک key ساده
+var versionSize = ctx.AppVersion.GetSize();
+Console.WriteLine($"AppVersion: {versionSize} بایت");
+
+// حجم کل یک hash
+var usersSize = ctx.Users.GetSize();
+Console.WriteLine($"Users hash: {usersSize} بایت");
+
+// حجم کل همه keyهای prefixed (از SCAN استفاده می‌کنه - برای production امنه)
+var settingsSize = ctx.UserSettings.GetSize();
+Console.WriteLine($"همه تنظیمات کاربران: {settingsSize} بایت");
+
+// مانیتور کردن همه keyها
+Console.WriteLine("خلاصه مصرف حافظه:");
+Console.WriteLine($"  AppVersion: {ctx.AppVersion.GetSize()} بایت");
+Console.WriteLine($"  Users: {ctx.Users.GetSize()} بایت");
+Console.WriteLine($"  UserSettings: {ctx.UserSettings.GetSize()} بایت");
+```
+
+**نکته‌ها:**
+- از دستور `MEMORY USAGE` Redis استفاده می‌کنه
+- اگر دستور پشتیبانی نشه یا غیرفعال باشه، `0` برمی‌گردونه
+- برای `RedisPrefixedKeys`، همه keyهای مچ شده رو با SCAN (نه KEYS) اسکن می‌کنه - برای production امنه
+- برای مانیتورینگ، برنامه‌ریزی ظرفیت، و بهینه‌سازی هزینه مفیده
 
 ---
 
@@ -280,9 +390,12 @@ Constructorها به این ترتیبه:
 ## نکته‌ها
 - برای read سنگین، read multiplexer جدا (روی replica) بذار.
 - `channelName` رو برای هر env/tenant ثابت نگه دار.
-- بعد از پیام pub/sub، با `ForceToReFetch(All)` کش رو تازه کن.
+- بعد از پیام pub/sub، با `InvalidateCache()` کش رو تازه کن.
 - Async برای مسیرهای شلوغ.
-- برای bulk بزرگ، `maxChunkSizeInBytes` معقول تنظیم کن.
+- **از عملیات تکه‌ای** (`ReadInChunks`, `WriteInChunks`, `RemoveInChunks`) برای دیتاست‌های بیش از 1000 آیتم استفاده کن.
+- **مصرف حافظه رو مانیتور کن** با `GetSize()` برای برنامه‌ریزی ظرفیت و بهینه‌سازی هزینه.
+- `chunkSize` مناسب تنظیم کن بر اساس حجم دیتا (پیش‌فرض 1000 برای اکثر موارد خوبه).
+- برای پارامتر `force`: از `true` استفاده کن تا cache رو bypass کنی و همیشه از Redis بخونی.
 
 ---
 

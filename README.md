@@ -14,6 +14,9 @@ Typed, discoverable Redis keys for .NET 9. Focus on developer ergonomics: concis
 - Built-in lightweight pub/sub notifications for cross-process cache invalidation
 - Opt-in custom serialization per key
 - Pluggable key naming via `nameGeneratorStrategy` delegate
+- **NEW**: Chunked operations for large datasets (`ReadInChunks`, `WriteInChunks`, `RemoveInChunks`)
+- **NEW**: Memory usage tracking with `GetSize()` method for all key types
+- **NEW**: Enhanced cache invalidation methods (single, bulk, and full)
 - Helpers: hash paging, DB size, bulk write with chunking, soft safety limits
 
 ## Install
@@ -137,15 +140,25 @@ If you omit constructors, the base parameterless ctor is used and the context is
 - `RedisHashKey<T>`: caches individual field wrappers on-demand
 - `RedisPrefixedKeys<T>`: caches individual field wrappers on-demand
 
-Invalidation helpers:
+Invalidation methods:
 ```csharp
+// RedisKey<T>
+ctx.AppVersion.InvalidateCache();          // Clear cache for the key
+
+// RedisHashKey<T>
+ctx.Users.InvalidateCache("42");           // Clear cache for single field
+ctx.Users.InvalidateCache(new[] {"1","2"}); // Clear cache for multiple fields
+ctx.Users.InvalidateCache();                // Clear entire hash cache
+
+// RedisPrefixedKeys<T>
+ctx.UserById.InvalidateCache("42");
+ctx.UserById.InvalidateCache(new[] {"1","2"});
+ctx.UserById.InvalidateCache();
+
+// Legacy methods (still supported)
 ctx.AppVersion.ForceToReFetch();
 ctx.Users.ForceToReFetch("42");
 ctx.Users.ForceToReFetchAll();
-ctx.Users.DoPublishAll();
-ctx.UserById.ForceToReFetch("42");
-ctx.UserById.ForceToReFetchAll();
-ctx.UserById.DoPublishAll();
 ```
 
 ---
@@ -155,32 +168,41 @@ ctx.UserById.DoPublishAll();
 RedisKey<T>
 - Construction in context: `public RedisKey<T> SomeKey { get; set; } = new(dbIndex);`
 - Write: `Write(T value)` / `Task WriteAsync(T value)`
-- Read: `T? Read()` / `Task<T?> ReadAsync()`
+- Read: `T? Read(bool force = false)` / `Task<T?> ReadAsync(bool force = false)`
 - Read full wrapper (timestamps): `RedisDataWrapper<T>? ReadFull()`
 - Exists: `bool Exists()`
 - Remove: `bool Remove()` / `Task<bool> RemoveAsync()`
-- Cache control: `ForceToReFetch()`
+- **Memory size**: `long GetSize()` - Returns memory usage in bytes
+- Cache control: `InvalidateCache()` / `ForceToReFetch()`
 
 RedisHashKey<T>
 - Construction: `public RedisHashKey<T> SomeHash { get; set; } = new(dbIndex, serialize?, deSerialize?);`
-- Write single: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
-- Write bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false, int maxChunkSizeInBytes = 1024*128)`
-- Read single: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
-- Read multi: `IDictionary<string,T?> Read(IEnumerable<string> fields)`
-- Remove: `Task<bool> RemoveAsync(string field)` / multi-field overload
+- Write single: `Write(string field, T value)` / `Task<bool> WriteAsync(string field, T value)`
+- Write bulk: `Write(IDictionary<string,T> data)` / `Task<bool> WriteAsync(IDictionary<string,T> data)`
+- **Write chunked**: `WriteInChunks(IDictionary<string,T> data, int chunkSize = 1000)` / `Task<bool> WriteInChunksAsync(...)`
+- Read single: `T? Read(string field, bool force = false)` / `Task<T?> ReadAsync(string field, bool force = false)`
+- Read multi: `Dictionary<string,T>? Read(IEnumerable<string> fields, bool force = false)` / async variant
+- **Read chunked**: `ReadInChunks(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)` / async variant
+- **Get all keys**: `RedisValue[] GetAllKeys()` / `Task<RedisValue[]> GetAllKeysAsync()`
+- Remove: `Remove(string key)` / `RemoveAsync(string key)` / multi-field overload
+- **Remove chunked**: `RemoveInChunks(IEnumerable<string> keys, int chunkSize = 1000)` / async variant
 - Remove whole hash: `Task<bool> RemoveAsync()`
-- Cache control: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
-- Publish all: `DoPublishAll()`
+- **Memory size**: `long GetSize()` - Returns hash memory usage in bytes
+- **Cache control**: `InvalidateCache(string key)` / `InvalidateCache(IEnumerable<string> keys)` / `InvalidateCache()`
+- **Indexer**: `T? this[string key]` - Read via indexer syntax
 
 RedisPrefixedKeys<T>
 - Construction: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);`
-- Write single: `Write(string field, T value)` / `Task WriteAsync(string field, T value)`
-- Write bulk: `Task<bool> WriteAsync(IDictionary<string,T> items, bool forceToPublish = false)`
-- Read single: `T? Read(string field)` / `Task<T?> ReadAsync(string field)`
-- Read multi: `IDictionary<string,T> Read(IEnumerable<string> fields)`
-- Remove: `Task<bool> RemoveAsync(string field)` / multi-field overload
-- Cache control: `ForceToReFetch(string field)` / `ForceToReFetchAll()`
-- Publish all: `DoPublishAll()`
+- Write single: `Write(string field, T value)` / `Task<bool> WriteAsync(string field, T value)`
+- Write bulk: `Write(IDictionary<string,T> data)` / `Task<bool> WriteAsync(IDictionary<string,T> data)`
+- **Write chunked**: `WriteInChunks(IDictionary<string,T> data, int chunkSize = 1000)` / async variant
+- Read single: `T? Read(string field, bool force = false)` / `Task<T?> ReadAsync(string field, bool force = false)`
+- Read multi: `Dictionary<string,T>? Read(IEnumerable<string> fields, bool force = false)` / async variant
+- **Read chunked**: `ReadInChunks(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)` / async variant
+- Remove: `Remove(string key)` / `RemoveAsync(string key)` / multi-field overload
+- **Remove chunked**: `RemoveInChunks(IEnumerable<string> keys, int chunkSize = 1000)` / async variant
+- **Memory size**: `long GetSize()` - Returns total memory usage of all prefixed keys in bytes (uses SCAN)
+- **Cache control**: `InvalidateCache(string key)` / `InvalidateCache(IEnumerable<string> keys)` / `InvalidateCache()`
 
 Context helpers
 - `Task<long> GetDbSize(int database)`
@@ -200,15 +222,75 @@ var (fields, total) = await ctx.GetHashKeysByPage(
 
 ---
 
-## Bulk Write Chunking
-When writing large dictionaries to a hash, you can pass a `maxChunkSizeInBytes` to split payloads:
+## Chunked Operations (NEW)
+When working with large datasets, use chunked methods to avoid blocking Redis and prevent timeouts:
+
+### Write in chunks
 ```csharp
-await ctx.Invoices.WriteAsync(
-    items: bigDictionary,
-    forceToPublish: false,
-    maxChunkSizeInBytes: 256 * 1024);
+var manyUsers = new Dictionary<string, UserProfile>();
+for (int i = 0; i < 10000; i++)
+    manyUsers[$"{i}"] = new UserProfile(i, $"User{i}", $"user{i}@example.com");
+
+// Hash: Write in chunks of 500
+await ctx.Users.WriteInChunksAsync(manyUsers, chunkSize: 500);
+
+// Prefixed keys: Write in chunks
+await ctx.UserSettings.WriteInChunksAsync(manyUsers, chunkSize: 500);
 ```
-This reduces the chance of timeouts due to oversized operations.
+
+### Read in chunks
+```csharp
+var userIds = Enumerable.Range(0, 10000).Select(i => i.ToString()).ToList();
+
+// Read 10,000 users in chunks of 500
+var users = await ctx.Users.ReadInChunksAsync(userIds, chunkSize: 500);
+Console.WriteLine($"Loaded {users?.Count} users");
+```
+
+### Remove in chunks
+```csharp
+var idsToRemove = Enumerable.Range(0, 10000).Select(i => i.ToString());
+
+// Remove in chunks
+await ctx.Users.RemoveInChunksAsync(idsToRemove, chunkSize: 500);
+```
+
+**Benefits:**
+- Prevents Redis from blocking on large operations
+- Reduces memory pressure
+- Avoids network timeouts
+- Production-safe for datasets with thousands of items
+
+---
+
+## Memory Usage Tracking (NEW)
+Track Redis memory usage for monitoring and optimization:
+
+```csharp
+// Get size of a simple key
+var versionSize = ctx.AppVersion.GetSize();
+Console.WriteLine($"AppVersion: {versionSize} bytes");
+
+// Get size of an entire hash
+var usersSize = ctx.Users.GetSize();
+Console.WriteLine($"Users hash: {usersSize} bytes");
+
+// Get total size of all prefixed keys (uses SCAN - production safe)
+var settingsSize = ctx.UserSettings.GetSize();
+Console.WriteLine($"All user settings: {settingsSize} bytes");
+
+// Monitor all keys
+Console.WriteLine("Memory Usage Summary:");
+Console.WriteLine($"  AppVersion: {ctx.AppVersion.GetSize()} bytes");
+Console.WriteLine($"  Users: {ctx.Users.GetSize()} bytes");
+Console.WriteLine($"  UserSettings: {ctx.UserSettings.GetSize()} bytes");
+```
+
+**Notes:**
+- Uses Redis `MEMORY USAGE` command
+- Returns `0` if command is not supported or disabled
+- For `RedisPrefixedKeys`, scans all matching keys using production-safe SCAN (not KEYS)
+- Useful for monitoring, capacity planning, and cost optimization
 
 ---
 
@@ -239,9 +321,12 @@ The factory tries these constructors in order:
 ## Best Practices
 - Use a separate read multiplexer pointing at a replica if you have heavy read traffic.
 - Keep `channelName` consistent per environment/tenant to avoid cross-talk.
-- Use `ForceToReFetch(All)` after receiving pub/sub messages to keep caches coherent.
+- Use `InvalidateCache()` methods after receiving pub/sub messages to keep caches coherent.
 - Prefer async methods for high-throughput paths.
-- Consider setting a reasonable `maxChunkSizeInBytes` for very large bulk writes.
+- **Use chunked operations** (`ReadInChunks`, `WriteInChunks`, `RemoveInChunks`) for datasets with 1000+ items.
+- **Monitor memory usage** with `GetSize()` for capacity planning and cost optimization.
+- Set appropriate `chunkSize` based on your data size (default 1000 is good for most cases).
+- For `force` parameter: use `true` to bypass cache and always read from Redis.
 
 ---
 

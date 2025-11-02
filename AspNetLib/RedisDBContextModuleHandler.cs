@@ -6,21 +6,20 @@ namespace Santel.Redis.TypedKeys
 {
     public static class RedisDBContextModuleHandler
     {
-        public static void AddRedisDBContext<T>(this IServiceCollection services, bool keepDataInMemory, Func<string, string>? nameGeneratorStrategy = null,
-            string? channelName = null)
+        public static void AddRedisDBContext<T>(this IServiceCollection services, RedisDBContextExtendedOptions opts)
             where T : RedisDBContextModule
         {
             services.AddSingleton<T>(sp =>
             {
-                var mux = sp.GetRequiredService<IConnectionMultiplexer>();
-                try
-                {
-                    return ActivatorUtilities.CreateInstance<T>(sp, mux, keepDataInMemory, nameGeneratorStrategy, channelName);
-                }
-                catch
-                {
-                    return ActivatorUtilities.CreateInstance<T>(sp, mux, mux, keepDataInMemory, nameGeneratorStrategy, channelName);
-                }
+                return ActivatorUtilities.CreateInstance<T>(sp, opts);
+            });
+        }
+        public static void AddRedisDBContext<T>(this IServiceCollection services, RedisDBContextOptions opts)
+            where T : RedisDBContextModule
+        {
+            services.AddSingleton<T>(sp =>
+            {
+                return ActivatorUtilities.CreateInstance<T>(sp, opts);
             });
         }
     }

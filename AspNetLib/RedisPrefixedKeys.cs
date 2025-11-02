@@ -2,10 +2,11 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
+using System.Threading.Tasks;
 
 namespace Santel.Redis.TypedKeys
 {
-    
+
     public class RedisPrefixedKeys<T> : RedisCommonProperties<T>, IRedisHashKey
     {
         private readonly ConcurrentDictionary<string, RedisDataWrapper<T>> _data = new();
@@ -37,11 +38,12 @@ namespace Santel.Redis.TypedKeys
             Writer = ContextConfig.Writer.GetDatabase(DbIndex);
         }
         private RedisKey Compose(string key) => (RedisKey)$"{FullName}:{key}";
-        
-        public RedisDataWrapper<T>? ReadFull(string key, bool force = false)
+
+
+        public T? Read(string key, bool force = false)
         {
             if (!force && _data.TryGetValue(key, out var cached))
-                return cached;
+                return cached.Data;
             try
             {
                 var temp = Reader.StringGet(Compose(key)).ToString();
@@ -52,7 +54,7 @@ namespace Santel.Redis.TypedKeys
                 {
                     if (ContextConfig.KeepDataInMemory)
                         _data[key] = data;
-                    return data;
+                    return data.Data;
                 }
             }
             catch (Exception e)
@@ -60,12 +62,6 @@ namespace Santel.Redis.TypedKeys
                 ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}:{key}");
             }
             return default;
-        }
-
-        public T? Read(string key, bool force = false)
-        {
-            var d = ReadFull(key, force);
-            return d == null ? default : d.Data;
         }
         public Dictionary<string, T>? Read(IEnumerable<string> keys, bool force = false)
         {
@@ -108,6 +104,64 @@ namespace Santel.Redis.TypedKeys
                 return default;
             }
         }
+
+        public Dictionary<string, T>? ReadInChunks(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)
+        {
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            var result = new Dictionary<string, T>();
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var chunkResult = Read(chunk, force);
+
+                    if (chunkResult != null)
+                    {
+                        foreach (var kv in chunkResult)
+                        {
+                            result[kv.Key] = kv.Value;
+                        }
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading chunks {FullName}:<many>");
+                return default;
+            }
+        }
+        public async Task<Dictionary<string, T>?> ReadInChunksAsync(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)
+        {
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            var result = new Dictionary<string, T>();
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var chunkResult = await ReadAsync(chunk, force);
+                    if (chunkResult != null)
+                    {
+                        foreach (var kv in chunkResult)
+                        {
+                            result[kv.Key] = kv.Value;
+                        }
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading chunks {FullName}:<many>");
+                return default;
+            }
+        }
         public async Task<T?> ReadAsync(string key, bool force = false)
         {
             if (!force && _data.TryGetValue(key, out var cached))
@@ -131,6 +185,48 @@ namespace Santel.Redis.TypedKeys
             }
             return default;
         }
+        public async Task<Dictionary<string, T>?> ReadAsync(IEnumerable<string> keys, bool force = false)
+        {
+            var result = new Dictionary<string, T>();
+            try
+            {
+                var toFetch = force ? keys.ToArray() : keys.Where(k => !_data.ContainsKey(k)).ToArray();
+
+                if (toFetch.Length > 0)
+                {
+                    var redisKeys = toFetch.Select(Compose).ToArray();
+                    var values = await Reader.StringGetAsync(redisKeys);
+                    for (var i = 0; i < toFetch.Length; i++)
+                    {
+                        if (!values[i].IsNullOrEmpty)
+                        {
+                            var d = DeSerialize(values[i].ToString());
+                            if (d != null)
+                            {
+                                if (ContextConfig.KeepDataInMemory)
+                                    _data[toFetch[i]] = d;
+                                result[toFetch[i]] = d.Data;
+                            }
+                        }
+                    }
+                }
+
+                if (ContextConfig.KeepDataInMemory)
+                {
+                    foreach (var k in keys)
+                        if (_data.TryGetValue(k, out var w) && !result.ContainsKey(k))
+                            result[k] = w.Data;
+                }
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}:<many>");
+                return default;
+            }
+        }
+
         public bool Write(string key, T d)
         {
             if (string.IsNullOrEmpty(key) || d == null)
@@ -140,7 +236,7 @@ namespace Santel.Redis.TypedKeys
                 var res = Writer.StringSet(Compose(key), Serialize(d));
                 if (ContextConfig.KeepDataInMemory)
                     _data[key] = new RedisDataWrapper<T>(d);
-                ContextConfig.PublishByKey(this,key);
+                ContextConfig.PublishByKey(this, key);
                 return res;
             }
             catch (Exception e)
@@ -149,6 +245,28 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
+        public bool Write(IDictionary<string, T> data)
+        {
+            if (data == null || data.Count == 0) return false;
+            try
+            {
+                foreach (var kv in data)
+                {
+                    var val = Serialize(kv.Value);
+                    Writer.StringSet(Compose(kv.Key), val);
+                    if (ContextConfig.KeepDataInMemory)
+                        _data[kv.Key] = new RedisDataWrapper<T>(kv.Value);
+                }
+                ContextConfig.Publish(this, data.Keys);
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}:<many>");
+                return false;
+            }
+        }
+
         public async Task<bool> WriteAsync(string key, T d)
         {
             if (string.IsNullOrEmpty(key) || d == null)
@@ -167,7 +285,7 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        public async Task<bool> WriteAsync(IDictionary<string, T> data, bool forceToPublish = false)
+        public async Task<bool> WriteAsync(IDictionary<string, T> data)
         {
             if (data == null || data.Count == 0) return false;
             try
@@ -181,8 +299,7 @@ namespace Santel.Redis.TypedKeys
                         _data[kv.Key] = new RedisDataWrapper<T>(kv.Value);
                 }
                 await Task.WhenAll(tasks);
-                if (forceToPublish)
-              ContextConfig.Publish(this);
+                ContextConfig.Publish(this, data.Keys);
                 return true;
             }
             catch (Exception e)
@@ -191,9 +308,7 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        /// <summary>
-        /// Remove one composed key.
-        /// </summary>
+
         public async Task<bool> RemoveAsync(string key)
         {
             if (string.IsNullOrEmpty(key))
@@ -204,20 +319,49 @@ namespace Santel.Redis.TypedKeys
         }
         public async Task<bool> RemoveAsync(IEnumerable<string> keys)
         {
-            var arr = keys?.ToArray() ?? Array.Empty<string>();
-            if (arr.Length == 0) return false;
-            var redisKeys = arr.Select(Compose).ToArray();
-            await Writer.KeyDeleteAsync(redisKeys);
+            var arr = keys?.Select(Compose).ToArray();
+            if (arr == null || arr.Length == 0) return false;
+            await Writer.KeyDeleteAsync(arr);
             foreach (var k in arr)
                 _data.TryRemove(k, out _);
             return true;
         }
-        public void ForceToReFetch(string key)
+
+
+
+        public bool Remove(IEnumerable<string> keys)
+        {
+            var arr = keys?.Select(Compose).ToArray();
+            if (arr == null || arr.Length == 0) return false;
+            Writer.KeyDelete(arr);
+            foreach (var k in arr)
+                _data.TryRemove(k, out _);
+            return true;
+        }
+        public bool Remove(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return false;
+            Writer.KeyDelete(Compose(key));
+            _data.TryRemove(key, out _);
+            return true;
+        }
+        public void InvalidateCache(string key)
         {
             if (_data != null && _data.ContainsKey(key))
                 _data.TryRemove(key, out _);
         }
-        public void ForceToReFetch()
+        public void InvalidateCache(IEnumerable<string> keys)
+        {
+            if (_data != null)
+            {
+                foreach (var key in keys)
+                {
+                    _data.TryRemove(key, out _);
+                }
+            }
+        }
+        public void InvalidateCache()
         {
             _data.Clear();
         }

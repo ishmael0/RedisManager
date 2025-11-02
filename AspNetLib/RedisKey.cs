@@ -186,7 +186,7 @@ namespace Santel.Redis.TypedKeys
         /// <summary>
         /// Clears the in-memory cached value forcing the next read to hit Redis.
         /// </summary>
-        public void ForceToReFetch()
+        public void InvalidateCache()
         {
             lock (_locker)
                 _data = null;

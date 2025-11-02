@@ -15,8 +15,8 @@ namespace Santel.Redis.TypedKeys
             Serialize = (d) => JsonConvert.SerializeObject(serialize == null ? new RedisDataWrapper<T>(d) : new RedisDataWrapper<string>(serialize(d)));
             DeSerialize = (str) =>
             {
-                if(str == null)
-                    return null;    
+                if (str == null)
+                    return null;
                 if (deSerialize == null)
                     return JsonConvert.DeserializeObject<RedisDataWrapper<T>>(str)!;
                 var temp = JsonConvert.DeserializeObject<RedisDataWrapper<string>>(str);
@@ -267,29 +267,6 @@ namespace Santel.Redis.TypedKeys
             return true;
         }
         /// <summary>
-        /// Determines whether adding a number of additional entries would exceed the configured limit (4000 items).
-        /// </summary>
-        /// <param name="additional">Expected number of new fields.</param>
-        /// <returns>True if limit would be exceeded.</returns>
-        private bool IsLimitExceeded(int additional = 0)
-        {
-            try
-            {
-                var len = (int)Writer.HashLength(FullName);
-                return len + additional > 4000;
-            }
-            catch
-            {
-                // Fallback to previous expensive approach only on failure
-                try
-                {
-                    var len = Writer.HashKeys(FullName).Length;
-                    return len + additional > 4000;
-                }
-                catch { return true; }
-            }
-        }
-        /// <summary>
         /// Writes or overwrites a single field value.
         /// </summary>
         /// <param name="key">Field name.</param>
@@ -300,11 +277,6 @@ namespace Santel.Redis.TypedKeys
             if (string.IsNullOrEmpty(key) || d == null) return false;
             try
             {
-                if (IsLimitExceeded())
-                {
-                    ContextConfig.Logger?.LogInformation($"in {nameof(Write)} method of RedisManager | for item {FullName}, key is larger than 4000 records!");
-                    return false;
-                }
                 var res = Writer.HashSet(FullName, key, Serialize(d));
                 ContextConfig.PublishByKey(this, key);
                 return res;
@@ -327,11 +299,6 @@ namespace Santel.Redis.TypedKeys
                 return false;
             try
             {
-                if (IsLimitExceeded(data.Count))
-                {
-                    ContextConfig.Logger?.LogInformation($"in {nameof(Write)} method of RedisManager | for item {FullName}, key is larger than 4000 records!");
-                    return false;
-                }
                 Writer.HashSet(FullName, data.Select(c => new HashEntry(c.Key, Serialize(c.Value))).ToArray());
                 if (forceToPublish)
                     ContextConfig.Publish(this);
@@ -362,11 +329,6 @@ namespace Santel.Redis.TypedKeys
             if (string.IsNullOrEmpty(key) || d == null) return false;
             try
             {
-                if (IsLimitExceeded())
-                {
-                    ContextConfig.Logger?.LogInformation($"in {nameof(WriteAsync)} method of RedisManager | for item {FullName}, key is larger than 4000 records!");
-                    return false;
-                }
                 var res = await Writer.HashSetAsync(FullName, key, Serialize(d));
                 ContextConfig.PublishByKey(this, key);
                 return res;
@@ -377,29 +339,17 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        /// <summary>
-        /// Asynchronously bulk writes entries with size-based chunking.
-        /// </summary>
-        /// <param name="data">Entries to write.</param>
-        /// <param name="forceToPublish">If true triggers publish-all after completion.</param>
-        /// <param name="maxChunkSizeInBytes">Maximum serialized byte-length per chunk.</param>
-        /// <returns>True if write operations succeed.</returns>
-        public async Task<bool> WriteAsync(IDictionary<string, T> data, bool forceToPublish = false, int maxChunkSizeInBytes = 500000)
+        public async Task<bool> WriteAsync(IDictionary<string, T> data, bool forceToPublish = false)
         {
             if (data == null || data.Count == 0)
                 return false;
             try
             {
-                if (IsLimitExceeded(data.Count))
+                foreach (var chunk in data)
                 {
-                    ContextConfig.Logger?.LogInformation($"in {nameof(WriteAsync)} method of RedisManager | for item {FullName}, key is larger than 4000 records!");
-                    return false;
+                    await Writer.HashSetAsync(FullName, chunk.Key, Serialize(chunk.Value));
                 }
 
-                var chunks = ChunkDataBySize(data, maxChunkSizeInBytes);
-
-                foreach (var chunk in chunks)
-                    await Writer.HashSetAsync(FullName, chunk.ToArray());
                 if (forceToPublish)
                     ContextConfig.Publish(this);
                 return true;
@@ -410,38 +360,12 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        /// <summary>
-        /// Splits large bulk data into bite-sized chunks based on serialized length.
-        /// </summary>
-        /// <param name="data">Source data entries.</param>
-        /// <param name="maxChunkSizeInBytes">Max bytes per chunk.</param>
-        private IEnumerable<List<HashEntry>> ChunkDataBySize(ICollection<KeyValuePair<string, T>> data, int maxChunkSizeInBytes)
-        {
-            var currentChunk = new List<HashEntry>();
-            var currentChunkSize = 0;
-
-            foreach (var entry in data)
-            {
-                var ser = Serialize(entry.Value);
-                if (currentChunkSize + ser.Length > maxChunkSizeInBytes)
-                {
-                    yield return currentChunk;
-                    currentChunk.Clear();
-                    currentChunkSize = 0;
-                }
-                currentChunk.Add(new HashEntry(entry.Key, ser));
-                currentChunkSize += ser.Length;
-            }
-
-            if (currentChunk.Count > 0)
-                yield return currentChunk;
-        }
-        public void ForceToReFetch(string key)
+        public void InvalidateCache(string key)
         {
             if (_data != null && _data.ContainsKey(key))
                 _data.TryRemove(key, out _);
         }
-        public void ForceToReFetch()
+        public void InvalidateCache()
         {
             _data.Clear();
         }
@@ -459,7 +383,7 @@ namespace Santel.Redis.TypedKeys
             await v.WriteAsync(Enumerable.Range(1, 10000).ToDictionary(c => c.ToString(), c => c));
             var tasks = new List<Task>();
             var keys = v.GetAllKeys().Select(c => (string)c!).ToList();
-            tasks.Add(Task.Run(() => v.ForceToReFetch()));
+            tasks.Add(Task.Run(() => v.InvalidateCache()));
             foreach (var key in keys)
                 tasks.Add(Task.Run(() => v.ReadAsync(key)));
             await Task.WhenAll(tasks);

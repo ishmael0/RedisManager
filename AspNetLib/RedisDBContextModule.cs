@@ -12,10 +12,16 @@ namespace Santel.Redis.TypedKeys
         public IConnectionMultiplexer Writer { get; set; }
         public IConnectionMultiplexer Reader { get; set; }
 
-        public void PublishByKey(IRedisHashKey a, string key)
+        public void Publish(IRedisHashKey a, string key)
         {
             if (Channel.HasValue)
                 Sub?.Publish(Channel.Value, $"{a.FullName}|{key}");
+        }
+        public void Publish(IRedisHashKey a, IEnumerable<string> keys)
+        {
+            if (Channel.HasValue)
+                foreach (var key in keys)
+                    Sub?.Publish(Channel.Value, $"{a.FullName}|{key}");
         }
         public void Publish(IRedisHashKey a)
         {

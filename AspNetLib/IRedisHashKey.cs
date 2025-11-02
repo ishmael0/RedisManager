@@ -4,13 +4,13 @@ namespace Santel.Redis.TypedKeys
 {
     public class RedisCommonProperties<T>
     {
-        public required Func<string?, RedisDataWrapper<T>?> DeSerialize { set; get; }
-        public required Func<T, string> Serialize { set; get; }
-        public required RedisKey FullName { set; get; }
-        public required IDatabase Reader { set; get; }
-        public required IDatabase Writer { set; get; }
-        public required int DbIndex { set; get; }
-        public required RedisDBContextModuleConfigs ContextConfig { set; get; }
+        public Func<string?, RedisDataWrapper<T>?> DeSerialize { set; get; } = null!;
+        public Func<T, string> Serialize { set; get; } = null!;
+        public RedisKey FullName { set; get; }
+        public IDatabase Reader { set; get; } = null!;
+        public IDatabase Writer { set; get; } = null!;
+        public int DbIndex { set; get; }
+        public RedisDBContextModuleConfigs ContextConfig { set; get; } = null!;
     }
     public interface IRedisKey
     {

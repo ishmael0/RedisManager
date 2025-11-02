@@ -367,10 +367,11 @@ namespace Santel.Redis.TypedKeys
         }
         public bool Remove(IEnumerable<string> keys)
         {
-            var arr = keys?.Select(Compose).ToArray();
-            if (arr == null || arr.Length == 0) return false;
-            Writer.KeyDelete(arr);
-            foreach (var k in arr)
+            var keyArray = keys?.ToArray();
+            if (keyArray == null || keyArray.Length == 0) return false;
+            var redisKeys = keyArray.Select(Compose).ToArray();
+            Writer.KeyDelete(redisKeys);
+            foreach (var k in keyArray)
                 _data.TryRemove(k, out _);
             return true;
         }
@@ -432,10 +433,11 @@ namespace Santel.Redis.TypedKeys
         }
         public async Task<bool> RemoveAsync(IEnumerable<string> keys)
         {
-            var arr = keys?.Select(Compose).ToArray();
-            if (arr == null || arr.Length == 0) return false;
-            await Writer.KeyDeleteAsync(arr);
-            foreach (var k in arr)
+            var keyArray = keys?.ToArray();
+            if (keyArray == null || keyArray.Length == 0) return false;
+            var redisKeys = keyArray.Select(Compose).ToArray();
+            await Writer.KeyDeleteAsync(redisKeys);
+            foreach (var k in keyArray)
                 _data.TryRemove(k, out _);
             return true;
         }

@@ -4,7 +4,7 @@ using StackExchange.Redis;
 
 namespace Santel.Redis.TypedKeys
 {
-    
+
     public class RedisKey<T> : RedisCommonProperties<T>, IRedisKey
     {
         private readonly object _locker = new();
@@ -16,7 +16,7 @@ namespace Santel.Redis.TypedKeys
             DeSerialize = (str) =>
             {
                 if (str == null)
-                    return null;    
+                    return null;
                 if (deSerialize == null)
                     return JsonConvert.DeserializeObject<RedisDataWrapper<T>>(str)!;
                 var temp = JsonConvert.DeserializeObject<RedisDataWrapper<string>>(str);
@@ -36,32 +36,38 @@ namespace Santel.Redis.TypedKeys
             Reader = ContextConfig.Reader.GetDatabase(DbIndex);
             Writer = ContextConfig.Writer.GetDatabase(DbIndex);
         }
-        
+
         public long GetSize()
         {
             var keyMemoryUsage = Reader.Execute("MEMORY", "USAGE", FullName);
             return keyMemoryUsage.IsNull ? 0 : Convert.ToInt64(keyMemoryUsage.ToString());
         }
-
-
-        
-        public RedisDataWrapper<T>? ReadFull(bool force = false)
+        public T? Read(bool force = false)
         {
-            if (!force && _data != null)
-                return _data;
-            try
+            // First check without lock for performance (if not forcing refresh)
+            if (!force)
             {
                 lock (_locker)
                 {
-                    var temp = Reader.StringGet(FullName).ToString();
-                    if (string.IsNullOrEmpty(temp))
-                        return default;
-                    var data = DeSerialize(temp);
-                    if (data != null)
+                    if (_data != null)
+                        return _data.Data;
+                }
+            }
+            try
+            {
+                var temp = Reader.StringGet(FullName).ToString();
+                if (string.IsNullOrEmpty(temp))
+                    return default;
+
+                var data = DeSerialize(temp);
+
+                if (data != null)
+                {
+                    lock (_locker)
                     {
                         if (ContextConfig.KeepDataInMemory)
                             _data = data;
-                        return data;
+                        return data.Data;
                     }
                 }
             }
@@ -69,22 +75,25 @@ namespace Santel.Redis.TypedKeys
             {
                 ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}");
             }
-            if (_data != null)
-                return _data;
+
+            lock (_locker)
+            {
+                if (_data != null)
+                    return _data.Data;
+            }
             return default;
         }
 
-        
-        public T? Read(bool force = false)
-        {
-            var d = ReadFull(force);
-            return d == null ? default : d.Data;
-        }
-        
         public async Task<T?> ReadAsync(bool force = false)
         {
-            if (!force && _data != null)
-                return _data.Data;
+            if (!force)
+            {
+                lock (_locker)
+                {
+                    if (_data != null)
+                        return _data.Data;
+                }
+            }
             try
             {
                 var temp = (await Reader.StringGetAsync(FullName)).ToString();
@@ -94,7 +103,7 @@ namespace Santel.Redis.TypedKeys
                 lock (_locker)
                     if (data != null)
                     {
-                        if (ContextConfig. KeepDataInMemory)
+                        if (ContextConfig.KeepDataInMemory)
                             _data = data;
                         return data.Data;
                     }
@@ -103,11 +112,14 @@ namespace Santel.Redis.TypedKeys
             {
                 ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}");
             }
-            if (_data != null)
-                return _data.Data;
+            lock (_locker)
+            {
+                if (_data != null)
+                    return _data.Data;
+            }
             return default;
         }
-        
+
         public bool Write(T d)
         {
             if (d == null) return false;
@@ -126,17 +138,17 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        
+
         public async Task<bool> WriteAsync(T d)
         {
             if (d == null) return false;
             try
             {
                 var res = await Writer.StringSetAsync(FullName, Serialize(d));
+                ContextConfig.Publish(this);
                 if (ContextConfig.KeepDataInMemory)
                     lock (_locker)
                         _data = new RedisDataWrapper<T>(d);
-                ContextConfig.Publish(this);
                 return res;
             }
             catch (Exception e)
@@ -145,14 +157,14 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        
+
         public void InvalidateCache()
         {
             lock (_locker)
                 _data = null;
             //Read(true);
         }
-        
+
         public RedisValue this[string key]
         {
             get => Reader.HashGet(FullName, key);

@@ -50,6 +50,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (RedisServerException ex)
             {
+                // MEMORY USAGE may be disabled on some Redis providers. Log and return 0.
                 ContextConfig.Logger?.LogWarning(ex, $"MEMORY USAGE not supported or failed for {FullName}");
                 return 0;
             }

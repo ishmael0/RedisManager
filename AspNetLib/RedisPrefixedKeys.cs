@@ -48,9 +48,10 @@ namespace Santel.Redis.TypedKeys
 
                 var redisServer = ContextConfig.Reader.GetServer(server);
                 var pattern = $"{FullName}:*";
-                var keys = redisServer.Keys(DbIndex, pattern: pattern);
-
-                foreach (var key in keys)
+                
+                // Use SCAN (via pageSize) instead of KEYS to avoid blocking Redis
+                // Iterates through all prefixed keys and sums their memory usage
+                foreach (var key in redisServer.Keys(DbIndex, pattern: pattern, pageSize: 250))
                 {
                     var keyMemoryUsage = Reader.Execute("MEMORY", "USAGE", key);
                     if (!keyMemoryUsage.IsNull)
@@ -65,6 +66,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (RedisServerException ex)
             {
+                // MEMORY USAGE may be disabled on some Redis providers. Log and return 0.
                 ContextConfig.Logger?.LogWarning(ex, $"MEMORY USAGE not supported or failed for {FullName}");
                 return 0;
             }

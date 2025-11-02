@@ -144,7 +144,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (Exception e)
             {
-                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}:{key}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}>{key}");
             }
             return default;
         }
@@ -173,7 +173,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (Exception e)
             {
-                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}:{key}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in reading {FullName}>{key}");
             }
             return default;
         }
@@ -283,7 +283,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (Exception e)
             {
-                ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}:{key}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}>{key}");
                 return false;
             }
 
@@ -335,7 +335,7 @@ namespace Santel.Redis.TypedKeys
             }
             catch (Exception e)
             {
-                ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}:{key}");
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in Writing {FullName}>{key}");
                 return false;
             }
         }

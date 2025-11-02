@@ -162,6 +162,7 @@ namespace Santel.Redis.TypedKeys
                 return default;
             }
         }
+
         public async Task<T?> ReadAsync(string key, bool force = false)
         {
             if (!force && _data.TryGetValue(key, out var cached))
@@ -267,6 +268,53 @@ namespace Santel.Redis.TypedKeys
             }
         }
 
+        public bool WriteInChunks(IDictionary<string, T> data, int chunkSize = 1000)
+        {
+            if (data == null || data.Count == 0) return false;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            try
+            {
+                foreach (var chunk in data.Chunk(chunkSize))
+                {
+                    var chunkDict = chunk.ToDictionary(kv => kv.Key, kv => kv.Value);
+                    var success = Write(chunkDict);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in writing chunks {FullName}:<many>");
+                return false;
+            }
+        }
+        public async Task<bool> WriteInChunksAsync(IDictionary<string, T> data, int chunkSize = 1000)
+        {
+            if (data == null || data.Count == 0) return false;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            try
+            {
+                foreach (var chunk in data.Chunk(chunkSize))
+                {
+                    var chunkDict = chunk.ToDictionary(kv => kv.Key, kv => kv.Value);
+                    var success = await WriteAsync(chunkDict);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in writing chunks {FullName}:<many>");
+                return false;
+            }
+        }
+
         public async Task<bool> WriteAsync(string key, T d)
         {
             if (string.IsNullOrEmpty(key) || d == null)
@@ -309,6 +357,74 @@ namespace Santel.Redis.TypedKeys
             }
         }
 
+
+
+
+        public bool Remove(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return false;
+            Writer.KeyDelete(Compose(key));
+            _data.TryRemove(key, out _);
+            return true;
+        }
+        public bool Remove(IEnumerable<string> keys)
+        {
+            var arr = keys?.Select(Compose).ToArray();
+            if (arr == null || arr.Length == 0) return false;
+            Writer.KeyDelete(arr);
+            foreach (var k in arr)
+                _data.TryRemove(k, out _);
+            return true;
+        }
+
+
+        public bool RemoveInChunks(IEnumerable<string> keys, int chunkSize = 1000)
+        {
+            if (keys == null) return false;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var success = Remove(chunk);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in removing chunks {FullName}:<many>");
+                return false;
+            }
+        }
+
+        public async Task<bool> RemoveInChunksAsync(IEnumerable<string> keys, int chunkSize = 1000)
+        {
+            if (keys == null) return false;
+            if (chunkSize <= 0)
+                throw new ArgumentException("Chunk size must be greater than zero.", nameof(chunkSize));
+
+            try
+            {
+                foreach (var chunk in keys.Chunk(chunkSize))
+                {
+                    var success = await RemoveAsync(chunk);
+                    if (!success)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                ContextConfig.Logger?.LogError(e, $"In RedisManager, in removing chunks {FullName}:<many>");
+                return false;
+            }
+        }
+
         public async Task<bool> RemoveAsync(string key)
         {
             if (string.IsNullOrEmpty(key))
@@ -324,26 +440,6 @@ namespace Santel.Redis.TypedKeys
             await Writer.KeyDeleteAsync(arr);
             foreach (var k in arr)
                 _data.TryRemove(k, out _);
-            return true;
-        }
-
-
-
-        public bool Remove(IEnumerable<string> keys)
-        {
-            var arr = keys?.Select(Compose).ToArray();
-            if (arr == null || arr.Length == 0) return false;
-            Writer.KeyDelete(arr);
-            foreach (var k in arr)
-                _data.TryRemove(k, out _);
-            return true;
-        }
-        public bool Remove(string key)
-        {
-            if (string.IsNullOrEmpty(key))
-                return false;
-            Writer.KeyDelete(Compose(key));
-            _data.TryRemove(key, out _);
             return true;
         }
         public void InvalidateCache(string key)

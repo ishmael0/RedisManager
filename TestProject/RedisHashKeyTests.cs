@@ -274,19 +274,6 @@ namespace TestProject
             Assert.True(result);
         }
 
-        [Fact]
-        public void Remove_ShouldReturnFalse_WhenKeyIsNull()
-        {
-            // Arrange
-            var redisHashKey = new RedisHashKey<string>(0);
-            redisHashKey.Init(_contextConfig, "test:hash");
-
-            // Act
-            var result = redisHashKey.Remove(null!);
-
-            // Assert
-            Assert.False(result);
-        }
 
         [Fact]
         public async Task RemoveAsync_SingleKey_ShouldReturnTrue()

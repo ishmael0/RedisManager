@@ -40,8 +40,24 @@ namespace Santel.Redis.TypedKeys
 
         public long GetSize()
         {
-            var keyMemoryUsage = Reader.Execute("MEMORY", "USAGE", FullName);
-            return keyMemoryUsage.IsNull ? 0 : Convert.ToInt64(keyMemoryUsage.ToString());
+            try
+            {
+                var keyMemoryUsage = Reader.Execute("MEMORY", "USAGE", FullName);
+                if (keyMemoryUsage.IsNull) return 0;
+                var s = keyMemoryUsage.ToString();
+                if (long.TryParse(s, out var size)) return size;
+                return 0;
+            }
+            catch (RedisServerException ex)
+            {
+                ContextConfig.Logger?.LogWarning(ex, $"MEMORY USAGE not supported or failed for {FullName}");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                ContextConfig.Logger?.LogError(ex, $"Error getting size for {FullName}");
+                return 0;
+            }
         }
 
         public RedisValue[] GetAllKeys()

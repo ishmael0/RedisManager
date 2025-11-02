@@ -37,6 +37,44 @@ namespace Santel.Redis.TypedKeys
             Reader = ContextConfig.Reader.GetDatabase(DbIndex);
             Writer = ContextConfig.Writer.GetDatabase(DbIndex);
         }
+
+        public long GetSize()
+        {
+            try
+            {
+                long totalSize = 0;
+                var server = ContextConfig.Reader.GetEndPoints().FirstOrDefault();
+                if (server == null) return 0;
+
+                var redisServer = ContextConfig.Reader.GetServer(server);
+                var pattern = $"{FullName}:*";
+                var keys = redisServer.Keys(DbIndex, pattern: pattern);
+
+                foreach (var key in keys)
+                {
+                    var keyMemoryUsage = Reader.Execute("MEMORY", "USAGE", key);
+                    if (!keyMemoryUsage.IsNull)
+                    {
+                        var s = keyMemoryUsage.ToString();
+                        if (long.TryParse(s, out var size))
+                            totalSize += size;
+                    }
+                }
+
+                return totalSize;
+            }
+            catch (RedisServerException ex)
+            {
+                ContextConfig.Logger?.LogWarning(ex, $"MEMORY USAGE not supported or failed for {FullName}");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                ContextConfig.Logger?.LogError(ex, $"Error getting size for {FullName}");
+                return 0;
+            }
+        }
+
         private RedisKey Compose(string key) => (RedisKey)$"{FullName}:{key}";
 
 

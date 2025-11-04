@@ -349,3 +349,10 @@ MIT
 
 ## Contributing
 Issues and PRs are welcome.
+
+---
+
+## TODO
+- Auto-invalidate cache when you receive publish messages
+- Add TTL (Time-To-Live) support for `RedisPrefixedKeys<T>`
+- Custome DataWrapper options (e.g., include/exclude timestamps)

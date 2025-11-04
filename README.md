@@ -330,6 +330,51 @@ The factory tries these constructors in order:
 
 ---
 
+## Thread Safety & Concurrency
+
+**Important:** The library's key types (`RedisKey<T>`, `RedisHashKey<T>`, `RedisPrefixedKeys<T>`) are **not thread-safe** for certain operations. Here's what you need to know:
+
+### In-Memory Cache Considerations
+- The in-memory cache (when `keepDataInMemory: true`) uses internal dictionaries that are **not protected by locks**.
+- Concurrent reads and writes to the same key/field from multiple threads can lead to race conditions, cache corruption, or incorrect data being returned.
+- **Write operations** (e.g., `Write`, `WriteAsync`) update both Redis and the local cache without synchronization.
+- **Cache invalidation** operations modify the internal cache dictionary without thread-safe guards.
+
+### Blocking Concerns
+- Synchronous methods (e.g., `Write()`, `Read()`) perform **blocking I/O** to Redis, which can degrade performance under high concurrency.
+- Using blocking calls on thread pool threads (e.g., inside ASP.NET Core request handlers) can lead to **thread pool starvation** and increased latency.
+- Chunked operations process data sequentially and block for the duration of all chunks.
+
+### Recommendations
+1. **Prefer async methods** (`WriteAsync`, `ReadAsync`, etc.) in concurrent scenarios to avoid blocking threads.
+2. **Avoid concurrent access** to the same key from multiple threads. If unavoidable, implement your own locking mechanism:
+   ```csharp
+   private readonly SemaphoreSlim _userLock = new(1, 1);
+   
+   await _userLock.WaitAsync();
+   try
+   {
+       await ctx.Users.WriteAsync("42", userData);
+   }
+   finally
+   {
+       _userLock.Release();
+   }
+   ```
+3. **Consider disabling in-memory caching** (`keepDataInMemory: false`) if you have heavy concurrent write traffic to the same keys.
+4. **Use separate key instances** per tenant/scope if possible to reduce contention.
+5. For **high-concurrency scenarios**, consider using Redis as the single source of truth and avoid relying on local caching.
+
+### What IS Thread-Safe
+- **StackExchange.Redis** connections (`IConnectionMultiplexer`) are thread-safe and designed for concurrent use.
+- **Redis operations themselves** are atomic and thread-safe at the Redis server level.
+- Reading different keys/fields concurrently is generally safe as each maintains separate cache entries.
+
+### Summary
+This library prioritizes simplicity and performance for typical CRUD scenarios. If your application requires heavy concurrent access to the same keys with in-memory caching enabled, you should implement application-level synchronization or disable caching for those keys.
+
+---
+
 ## Troubleshooting
 - No pub/sub events? Ensure `channelName` was provided and the publisher uses the write connection.
 - Seeing stale data? Verify `keepDataInMemory` settings and that your subscribers invalidate caches.

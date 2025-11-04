@@ -17,6 +17,7 @@ Typed, discoverable Redis keys for .NET 9. Focus on developer ergonomics: concis
 - **NEW**: Chunked operations for large datasets (`ReadInChunks`, `WriteInChunks`, `RemoveInChunks`)
 - **NEW**: Memory usage tracking with `GetSize()` method for all key types
 - **NEW**: Enhanced cache invalidation methods (single, bulk, and full)
+- **NEW**: TTL (Time-To-Live) support for `RedisPrefixedKeys<T>` - automatic key expiration
 - Helpers: hash paging, DB size, bulk write with chunking, soft safety limits
 
 ## Install
@@ -79,8 +80,12 @@ var version = ctx.AppVersion.Read();
 ctx.Users.Write("42", new UserProfile(42, "Alice"));
 var alice = ctx.Users.Read("42");
 
-await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"));
+// Prefixed keys with automatic expiration (TTL)
+await ctx.UserById.WriteAsync("42", new UserProfile(42, "Alice"), expiry: TimeSpan.FromMinutes(30));
 var byId = await ctx.UserById.ReadAsync("42");
+
+// Write session data that expires in 1 hour
+await ctx.UserById.WriteAsync("session_123", sessionUser, TimeSpan.FromHours(1));
 ```
 
 ---
@@ -193,9 +198,9 @@ RedisHashKey<T>
 
 RedisPrefixedKeys<T>
 - Construction: `public RedisPrefixedKeys<T> SomeGroup { get; set; } = new(dbIndex);`
-- Write single: `Write(string field, T value)` / `Task<bool> WriteAsync(string field, T value)`
-- Write bulk: `Write(IDictionary<string,T> data)` / `Task<bool> WriteAsync(IDictionary<string,T> data)`
-- **Write chunked**: `WriteInChunks(IDictionary<string,T> data, int chunkSize = 1000)` / async variant
+- Write single: `Write(string field, T value, TimeSpan? expiry = null)` / `Task<bool> WriteAsync(string field, T value, TimeSpan? expiry = null)`
+- Write bulk: `Write(IDictionary<string,T> data, TimeSpan? expiry = null)` / `Task<bool> WriteAsync(IDictionary<string,T> data, TimeSpan? expiry = null)`
+- **Write chunked**: `WriteInChunks(IDictionary<string,T> data, int chunkSize = 1000, TimeSpan? expiry = null)` / async variant
 - Read single: `T? Read(string field, bool force = false)` / `Task<T?> ReadAsync(string field, bool force = false)`
 - Read multi: `Dictionary<string,T>? Read(IEnumerable<string> fields, bool force = false)` / async variant
 - **Read chunked**: `ReadInChunks(IEnumerable<string> keys, int chunkSize = 1000, bool force = false)` / async variant
@@ -203,6 +208,7 @@ RedisPrefixedKeys<T>
 - **Remove chunked**: `RemoveInChunks(IEnumerable<string> keys, int chunkSize = 1000)` / async variant
 - **Memory size**: `long GetSize()` - Returns total memory usage of all prefixed keys in bytes (uses SCAN)
 - **Cache control**: `InvalidateCache(string key)` / `InvalidateCache(IEnumerable<string> keys)` / `InvalidateCache()`
+- **TTL support**: All write methods accept optional `TimeSpan? expiry` parameter for automatic key expiration
 
 Context helpers
 - `Task<long> GetDbSize(int database)`
@@ -260,6 +266,48 @@ await ctx.Users.RemoveInChunksAsync(idsToRemove, chunkSize: 500);
 - Reduces memory pressure
 - Avoids network timeouts
 - Production-safe for datasets with thousands of items
+
+---
+
+## Time-To-Live (TTL) Support for RedisPrefixedKeys (NEW)
+
+`RedisPrefixedKeys<T>` now supports automatic key expiration via TTL. All write methods accept an optional `TimeSpan? expiry` parameter:
+
+```csharp
+// Write with 5-minute TTL
+await ctx.UserById.WriteAsync("42", userData, expiry: TimeSpan.FromMinutes(5));
+
+// Write session data with 1-hour expiration
+await ctx.Sessions.WriteAsync("session123", sessionData, TimeSpan.FromHours(1));
+
+// Bulk write with TTL
+var tempData = new Dictionary<string, UserProfile>
+{
+    ["temp1"] = user1,
+    ["temp2"] = user2
+};
+await ctx.UserById.WriteAsync(tempData, expiry: TimeSpan.FromMinutes(15));
+
+// Chunked write with TTL for large datasets
+var manyTempUsers = new Dictionary<string, UserProfile>();
+for (int i = 0; i < 10000; i++)
+    manyTempUsers[$"temp{i}"] = new UserProfile(i, $"TempUser{i}");
+
+await ctx.UserById.WriteInChunksAsync(manyTempUsers, chunkSize: 500, expiry: TimeSpan.FromHours(2));
+```
+
+**Use cases for TTL:**
+- **Session data**: Automatically expire user sessions after inactivity
+- **Cache entries**: Implement time-based cache invalidation
+- **Temporary tokens**: Store verification codes, password reset tokens
+- **Rate limiting**: Track API calls that reset after a time window
+- **Temporary data**: Store processing results that don't need permanent storage
+
+**Notes:**
+- TTL is set at the time of writing; updating a key resets its expiration
+- If `expiry` is `null`, keys persist indefinitely (default behavior)
+- The in-memory cache doesn't automatically clear when Redis keys expire - use pub/sub or explicit invalidation
+- Consider combining TTL with cache invalidation strategies for consistency
 
 ---
 
@@ -327,6 +375,7 @@ The factory tries these constructors in order:
 - **Monitor memory usage** with `GetSize()` for capacity planning and cost optimization.
 - Set appropriate `chunkSize` based on your data size (default 1000 is good for most cases).
 - For `force` parameter: use `true` to bypass cache and always read from Redis.
+- **Use TTL for temporary data**: Set expiration times on session data, temporary tokens, and cache entries to prevent memory bloat and ensure automatic cleanup.
 
 ---
 
@@ -398,6 +447,14 @@ Issues and PRs are welcome.
 ---
 
 ## TODO
+
+### Done ✅
+- ~~Chunked operations for large datasets~~ ✅ Implemented `ReadInChunks`, `WriteInChunks`, `RemoveInChunks`
+- ~~Memory usage tracking~~ ✅ Added `GetSize()` method for all key types
+- ~~Enhanced cache invalidation~~ ✅ Single, bulk, and full invalidation methods
+- ~~TTL (Time-To-Live) support for `RedisPrefixedKeys<T>`~~ ✅ All write methods support optional expiry parameter
+- ~~Thread safety documentation~~ ✅ Added comprehensive thread safety and concurrency section
+
+### Planned
 - Auto-invalidate cache when you receive publish messages
-- Add TTL (Time-To-Live) support for `RedisPrefixedKeys<T>`
-- Custome DataWrapper options (e.g., include/exclude timestamps)
+- Custom DataWrapper options (e.g., include/exclude timestamps)

@@ -48,7 +48,7 @@ namespace Santel.Redis.TypedKeys
 
                 var redisServer = ContextConfig.Reader.GetServer(server);
                 var pattern = $"{FullName}:*";
-                
+
                 // Use SCAN (via pageSize) instead of KEYS to avoid blocking Redis
                 // Iterates through all prefixed keys and sums their memory usage
                 foreach (var key in redisServer.Keys(DbIndex, pattern: pattern, pageSize: 250))
@@ -268,13 +268,13 @@ namespace Santel.Redis.TypedKeys
             }
         }
 
-        public bool Write(string key, T d)
+        public bool Write(string key, T d, TimeSpan? expiry = null)
         {
             if (string.IsNullOrEmpty(key) || d == null)
                 return false;
             try
             {
-                var res = Writer.StringSet(Compose(key), Serialize(d));
+                var res = Writer.StringSet(Compose(key), Serialize(d), expiry);
                 if (ContextConfig.KeepDataInMemory)
                     _data[key] = new RedisDataWrapper<T>(d);
                 ContextConfig.Publish(this, key);
@@ -286,7 +286,7 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        public bool Write(IDictionary<string, T> data)
+        public bool Write(IDictionary<string, T> data, TimeSpan? expiry = null)
         {
             if (data == null || data.Count == 0) return false;
             try
@@ -294,7 +294,7 @@ namespace Santel.Redis.TypedKeys
                 foreach (var kv in data)
                 {
                     var val = Serialize(kv.Value);
-                    Writer.StringSet(Compose(kv.Key), val);
+                    Writer.StringSet(Compose(kv.Key), val, expiry);
                     if (ContextConfig.KeepDataInMemory)
                         _data[kv.Key] = new RedisDataWrapper<T>(kv.Value);
                 }
@@ -308,7 +308,7 @@ namespace Santel.Redis.TypedKeys
             }
         }
 
-        public bool WriteInChunks(IDictionary<string, T> data, int chunkSize = 1000)
+        public bool WriteInChunks(IDictionary<string, T> data, int chunkSize = 1000, TimeSpan? expiry = null)
         {
             if (data == null || data.Count == 0) return false;
             if (chunkSize <= 0)
@@ -319,7 +319,7 @@ namespace Santel.Redis.TypedKeys
                 foreach (var chunk in data.Chunk(chunkSize))
                 {
                     var chunkDict = chunk.ToDictionary(kv => kv.Key, kv => kv.Value);
-                    var success = Write(chunkDict);
+                    var success = Write(chunkDict, expiry);
                     if (!success)
                         return false;
                 }
@@ -331,7 +331,7 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        public async Task<bool> WriteInChunksAsync(IDictionary<string, T> data, int chunkSize = 1000)
+        public async Task<bool> WriteInChunksAsync(IDictionary<string, T> data, int chunkSize = 1000, TimeSpan? expiry = null)
         {
             if (data == null || data.Count == 0) return false;
             if (chunkSize <= 0)
@@ -342,7 +342,7 @@ namespace Santel.Redis.TypedKeys
                 foreach (var chunk in data.Chunk(chunkSize))
                 {
                     var chunkDict = chunk.ToDictionary(kv => kv.Key, kv => kv.Value);
-                    var success = await WriteAsync(chunkDict);
+                    var success = await WriteAsync(chunkDict, expiry);
                     if (!success)
                         return false;
                 }
@@ -355,13 +355,13 @@ namespace Santel.Redis.TypedKeys
             }
         }
 
-        public async Task<bool> WriteAsync(string key, T d)
+        public async Task<bool> WriteAsync(string key, T d, TimeSpan? expiry = null)
         {
             if (string.IsNullOrEmpty(key) || d == null)
                 return false;
             try
             {
-                var res = await Writer.StringSetAsync(Compose(key), Serialize(d));
+                var res = await Writer.StringSetAsync(Compose(key), Serialize(d), expiry);
                 if (ContextConfig.KeepDataInMemory)
                     _data[key] = new RedisDataWrapper<T>(d);
                 ContextConfig.Publish(this, key);
@@ -373,7 +373,7 @@ namespace Santel.Redis.TypedKeys
                 return false;
             }
         }
-        public async Task<bool> WriteAsync(IDictionary<string, T> data)
+        public async Task<bool> WriteAsync(IDictionary<string, T> data, TimeSpan? expiry = null)
         {
             if (data == null || data.Count == 0) return false;
             try
@@ -382,7 +382,7 @@ namespace Santel.Redis.TypedKeys
                 foreach (var kv in data)
                 {
                     var val = Serialize(kv.Value);
-                    tasks.Add(Writer.StringSetAsync(Compose(kv.Key), val));
+                    tasks.Add(Writer.StringSetAsync(Compose(kv.Key), val, expiry));
                     if (ContextConfig.KeepDataInMemory)
                         _data[kv.Key] = new RedisDataWrapper<T>(kv.Value);
                 }

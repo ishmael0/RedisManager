@@ -213,6 +213,40 @@ var sessionData = new Dictionary<string, UserProfile>
 await ctx.Sessions.WriteAsync(sessionData);
 Console.WriteLine("Session data written");
 
+// Scenario: TTL (Time-To-Live) - Keys that auto-expire
+Console.WriteLine("\n--- TTL Examples ---");
+
+// Write temporary session with 30-minute expiration
+await ctx.UserSettings.WriteAsync("temp_session_1", 
+    new UserSettings("temp_user", "dark", "en-US"), 
+    expiry: TimeSpan.FromMinutes(30));
+Console.WriteLine("Temporary session written with 30-minute TTL");
+
+// Write verification token with 5-minute expiration
+await ctx.UserSettings.WriteAsync("verify_token_abc", 
+    new UserSettings("user123", "default", "en-US"), 
+    expiry: TimeSpan.FromMinutes(5));
+Console.WriteLine("Verification token written with 5-minute TTL");
+
+// Bulk write with TTL - all keys expire together
+var tempData = new Dictionary<string, UserSettings>
+{
+    ["temp1"] = new UserSettings("temp1", "light", "en-US"),
+    ["temp2"] = new UserSettings("temp2", "dark", "fr-FR"),
+    ["temp3"] = new UserSettings("temp3", "auto", "de-DE")
+};
+await ctx.UserSettings.WriteAsync(tempData, expiry: TimeSpan.FromHours(1));
+Console.WriteLine($"Wrote {tempData.Count} temporary items with 1-hour TTL");
+
+// Chunked write with TTL for large temporary datasets
+var largeTempData = new Dictionary<string, UserSettings>();
+for (var i = 20000; i < 21000; i++)
+{
+    largeTempData[$"temp_{i}"] = new UserSettings($"temp_{i}", "dark", "en-US");
+}
+await ctx.UserSettings.WriteInChunksAsync(largeTempData, chunkSize: 500, expiry: TimeSpan.FromMinutes(15));
+Console.WriteLine($"Wrote {largeTempData.Count} temporary items in chunks with 15-minute TTL");
+
 // Scenario: Complex object with custom serialization
 await ctx.ComplexData.WriteAsync("config1", new ComplexConfig
 {

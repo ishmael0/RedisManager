@@ -92,7 +92,7 @@ Console.WriteLine($"Total users in hash: {allUserKeys.Length}");
 
 // Chunked operations for large datasets
 var manyUsers = new Dictionary<string, UserProfile>();
-for (int i = 100; i < 10100; i++)
+for (var i = 100; i < 10100; i++)
 {
     manyUsers[$"{i}"] = new UserProfile(i, $"User{i}", $"user{i}@example.com");
 }
@@ -164,7 +164,7 @@ Console.WriteLine($"Bulk read: {loadedSettings?.Count} settings loaded");
 
 // Chunked write for large datasets
 var manySettings = new Dictionary<string, UserSettings>();
-for (int i = 1000; i < 11000; i++)
+for (var i = 1000; i < 11000; i++)
 {
     manySettings[$"user{i}"] = new UserSettings($"user{i}", "dark", "en-US");
 }
